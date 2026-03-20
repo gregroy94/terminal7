@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TERMINAL-7 // ADMINISTRATION</title>
+
+<script type="module">
+import { initializeApp }  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, set, get, onValue, update, remove, push, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+// ══ VOTRE CONFIG FIREBASE (identique au fichier joueur) ══
+const firebaseConfig = {
+  apiKey: "AIzaSyCmQ0lrGgsQtbDAwKqvB3datUv6XvhTP1k",
+  authDomain: "terminal-7-8d201.firebaseapp.com",
+  databaseURL: "https://terminal-7-8d201-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "terminal-7-8d201",
+  storageBucket: "terminal-7-8d201.firebasestorage.app",
+  messagingSenderId: "392390485874",
+  appId: "1:392390485874:web:518f750dab2281dbd15feb"
+};
+const app = initializeApp(firebaseConfig);
+const db  = getDatabase(app);
+
+// ══════════════════════════════════════════════════════
+// ÉTAT
+// ══════════════════════════════════════════════════════
+let connecte    = false;
+let sessionId   = null;
+let liveTimers  = {};   // timers locaux pour afficher chrono en direct
+
+const MDP_ADMIN = "admin"; // mot de passe admin local (modifiable ici)
+
+// ══════════════════════════════════════════════════════
+// LOGIN ADMIN
+// ══════════════════════════════════════════════════════
+function validerAdmin() {
+  const v = document.getElementById("admin-pwd").value;
+  if (v === MDP_ADMIN) {
+    connecte = true;
+    document.getElementById("login-screen").style.display = "none";
+    document.getElementById("main-panel").style.display   = "flex";
+    chargerAdmin();
+  } else {
+    document.getElementById("login-err").textContent = "⚠ MOT DE PASSE INCORRECT";
+    document.getElementById("admin-pwd").value = "";
+  }
+}
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("admin-pwd").addEventListener("keydown", e => {
+    if (e.key === "Enter") validerAdmin();
+  });
+  document.getElementById("login-btn").addEventListener("click", validerAdmin);
+});
+
+// ══════════════════════════════════════════════════════
+// CHARGEMENT INITIAL
+// ══════════════════════════════════════════════════════
+async function chargerAdmin() {
+  // Config
+  const snap = await get(ref(db, "config"));
+  if (snap.exists()) {
+    const c = snap.val();
+    sessionId = c.sessionId || genSessionId();
+    document.getElementById("cfg-mdp").value          = c.motDePasse || "";
+    document.getElementById("cfg-code").value         = c.codeVictoire || "";
+    document.getElementById("cfg-msg-victoire").value = c.msgVictoire || "";
+    document.getElementById("cfg-msg-gameover").value = c.msgGameOver || "";
+  }
+
+  // Énigmes
+  const snapE = await get(ref(db, "enigmes"));
+  if (snapE.exists()) {
+    const raw = snapE.val();
+    const enigmes = Array.isArray(raw) ? raw : Object.values(raw);
+    renderEnigmes(enigmes);
+  }
+
+  // Écoute temps réel joueurs
+  ecouterJoueurs();
+  ecouterClassement();
+}
+
+// ══════════════════════════════════════════════════════
+// ÉCOUTE JOUEURS EN TEMPS RÉEL
+// ══════════════════════════════════════════════════════
+function ecouterJoueurs() {
+  onValue(ref(db, `joueurs/${sessionId}`), snap => {
+    const data = snap.exists() ? snap.val() : {};
+    renderJoueurs(data);
+  });
+}
+
+function ecouterClassement() {
+  onValue(ref(db, `classement/${sessionId}`), snap => {
+    const data = snap.exists() ? snap.val() : {};
+    renderClassement(data);
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// RENDER TABLEAU JOUEURS EN DIRECT
+// ══════════════════════════════════════════════════════
+function fmt(s) {
+  s = Math.max(0, s);
+  return String(Math.floor(s/3600)).padStart(2,"0") + ":" +
+         String(Math.floor((s%3600)/60)).padStart(2,"0") + ":" +
+         String(s%60).padStart(2,"0");
+}
+
+// Chronomètres locaux pour les joueurs actifs
+function demarrerLiveTimer(id, base) {
+  if (liveTimers[id]) clearInterval(liveTimers[id]);
+  const startedAt = Date.now();
+  liveTimers[id] = setInterval(() => {
+    const el = document.getElementById("timer-" + id);
+    if (el) {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      el.textContent = fmt(base + elapsed);
+    } else {
+      clearInterval(liveTimers[id]);
+    }
+  }, 1000);
+}
+
+function stopLiveTimer(id) {
+  if (liveTimers[id]) { clearInterval(liveTimers[id]); delete liveTimers[id]; }
+}
+
+function renderJoueurs(data) {
+  const tbody = document.getElementById("joueurs-tbody");
+  tbody.innerHTML = "";
+
+  // Arrêter tous les timers existants
+  Object.keys(liveTimers).forEach(id => stopLiveTimer(id));
+
+  const joueurs = Object.values(data);
+  if (joueurs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">Aucun joueur connecté</td></tr>';
+    return;
+  }
+
+  // Récupérer le nombre total d'énigmes
+  get(ref(db, "enigmes")).then(snapE => {
+    const raw   = snapE.exists() ? snapE.val() : [];
+    const total = Array.isArray(raw) ? raw.length : Object.keys(raw).length;
+
+    joueurs.forEach(j => {
+      const tr = document.createElement("tr");
+      const etape = `${(j.enigmeIdx||0)+1} / ${total}`;
+      const fini  = j.fini ? '<span class="badge-ok">✓ FINI</span>' : '<span class="badge-en-cours">EN COURS</span>';
+      const timerId = "timer-" + j.joueurId;
+
+      tr.innerHTML = `
+        <td class="td-prenom">${(j.prenom||"?").toUpperCase()}</td>
+        <td>${fini}</td>
+        <td>${etape}</td>
+        <td id="${timerId}">${fmt(j.tempsSecondes||0)}</td>
+        <td>${j.indiceIdx||0}</td>
+      `;
+      tbody.appendChild(tr);
+
+      // Démarrer le timer live si le joueur n'a pas fini
+      if (!j.fini) {
+        demarrerLiveTimer(j.joueurId, j.tempsSecondes || 0);
+      }
+    });
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// RENDER CLASSEMENT
+// ══════════════════════════════════════════════════════
+function renderClassement(data) {
+  const tbody = document.getElementById("classement-tbody");
+  tbody.innerHTML = "";
+
+  const scores = Object.values(data).sort((a,b) => a.tempsSecondes - b.tempsSecondes);
+
+  if (scores.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-cell">Aucun joueur n\'a terminé</td></tr>';
+    return;
+  }
+
+  scores.forEach((s, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="td-rank">${i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : (i+1)}</td>
+      <td class="td-prenom">${(s.prenom||"?").toUpperCase()}</td>
+      <td class="td-temps">${fmt(s.tempsSecondes)}</td>
+      <td>${s.indicesUtilises||0}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// SAUVEGARDER CONFIG + ÉNIGMES
+// ══════════════════════════════════════════════════════
+async function sauvegarder() {
+  const mdp    = document.getElementById("cfg-mdp").value.trim();
+  const code   = document.getElementById("cfg-code").value.trim();
+  const msgVic = document.getElementById("cfg-msg-victoire").value.trim();
+
+  if (!mdp) { afficherStatut("⚠ Mot de passe joueur manquant", "err"); return; }
+
+  // Lire toutes les cartes
+  const cards = document.querySelectorAll(".enigme-card");
+  const enigmes = [];
+  let erreur = false;
+
+  cards.forEach(card => {
+    const titre   = card.querySelector(".f-titre").value.trim();
+    const intro   = card.querySelector(".f-intro").value.trim();
+    const indice1 = card.querySelector(".f-indice1").value.trim();
+    const indice2 = card.querySelector(".f-indice2").value.trim();
+    const indice3 = card.querySelector(".f-indice3").value.trim();
+    const echec   = card.querySelector(".f-echec").value.trim();
+    const victoire= card.querySelector(".f-victoire").value.trim();
+    const repInputs = card.querySelectorAll(".f-reponses .rep-tag input");
+    const reponses = [];
+    repInputs.forEach(inp => { const v = inp.value.trim(); if (v) reponses.push(norm(v)); });
+
+    if (reponses.length === 0) {
+      afficherStatut(`⚠ L'énigme "${titre}" n'a aucune réponse`, "err");
+      erreur = true; return;
+    }
+    enigmes.push({ titre, intro, indice1, indice2, indice3, echec, victoire, reponses });
+  });
+
+  if (erreur || enigmes.length === 0) return;
+
+  try {
+    await set(ref(db, "config"), {
+      motDePasse: mdp,
+      codeVictoire: code || "OMEGA-7-LIBRE",
+      msgVictoire: msgVic || "Félicitations !",
+      sessionId,
+    });
+    await set(ref(db, "enigmes"), enigmes);
+    afficherStatut("✓ CONFIG & ÉNIGMES SAUVEGARDÉES DANS FIREBASE", "ok");
+  } catch(e) {
+    afficherStatut("⚠ Erreur Firebase : " + e.message, "err");
+  }
+}
+window.sauvegarder = sauvegarder;
+
+// ══════════════════════════════════════════════════════
+// RÉINITIALISER LE JEU
+// ══════════════════════════════════════════════════════
+async function reinitialiserJeu() {
+  if (!confirm("Réinitialiser le jeu ?\n\nTous les joueurs seront déconnectés et leur progression effacée.\nLe classement sera réinitialisé.")) return;
+
+  const newSession = genSessionId();
+  sessionId = newSession;
+
+  try {
+    // Mettre à jour la sessionId dans config → déclenche la déconnexion de tous les joueurs
+    await update(ref(db, "config"), { sessionId: newSession });
+    // Optionnel : supprimer l'ancienne session
+    // (on garde les données pour archivage ; seul sessionId change)
+    afficherStatut("✓ JEU RÉINITIALISÉ — Nouvelle session : " + newSession, "ok");
+    // Relancer l'écoute sur la nouvelle session
+    ecouterJoueurs();
+    ecouterClassement();
+  } catch(e) {
+    afficherStatut("⚠ Erreur : " + e.message, "err");
+  }
+}
+window.reinitialiserJeu = reinitialiserJeu;
+
+function genSessionId() {
+  return "session_" + Date.now();
+}
+
+// ══════════════════════════════════════════════════════
+// GESTION DES ÉNIGMES (formulaire)
+// ══════════════════════════════════════════════════════
+function norm(s) {
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
+}
+
+function renderEnigmes(enigmes) {
+  const container = document.getElementById("enigmes-container");
+  container.innerHTML = "";
+  enigmes.forEach((e, i) => container.appendChild(creerCarte(e, i)));
+}
+window.renderEnigmes = renderEnigmes;
+
+function creerCarte(e, i) {
+  const card = document.createElement("div");
+  card.className = "enigme-card";
+  card.dataset.index = i;
+
+  card.innerHTML = `
+    <div class="card-header" onclick="toggleCarte(this)">
+      <div class="card-num">${String(i+1).padStart(2,"0")}</div>
+      <div class="card-titre-preview">${e.titre || "Nouvelle énigme"}</div>
+      <div class="card-actions" onclick="event.stopPropagation()">
+        <button class="btn-move" onclick="monterEnigme(${i})" title="Monter">▲</button>
+        <button class="btn-move" onclick="descendreEnigme(${i})" title="Descendre">▼</button>
+        <button class="btn-del" onclick="supprimerEnigme(${i})">✕ SUPPRIMER</button>
+      </div>
+      <div class="card-toggle">▼</div>
+    </div>
+    <div class="card-body">
+      <div class="field-group">
+        <label>Titre</label>
+        <input type="text" class="f-titre" value="${(e.titre||"").replace(/"/g,"&quot;")}"
+               oninput="this.closest('.enigme-card').querySelector('.card-titre-preview').textContent=this.value||'Nouvelle énigme'">
+      </div>
+      <div class="field-group">
+        <label>Introduction (texte affiché au début)</label>
+        <textarea class="f-intro" rows="5">${e.intro||""}</textarea>
+      </div>
+      <div class="field-group">
+        <label>Indices (3 niveaux)</label>
+        <div class="indices-grid">
+          <div class="idx-field"><label>Niveau 1 — vague</label><textarea class="f-indice1" rows="2">${e.indice1||""}</textarea></div>
+          <div class="idx-field"><label>Niveau 2 — intermédiaire</label><textarea class="f-indice2" rows="2">${e.indice2||""}</textarea></div>
+          <div class="idx-field"><label>Niveau 3 — quasi-solution</label><textarea class="f-indice3" rows="2">${e.indice3||""}</textarea></div>
+        </div>
+      </div>
+      <div class="field-group">
+        <label>Réponses acceptées</label>
+        <div class="reponses-row f-reponses"></div>
+        <button class="add-rep-btn" onclick="ajouterReponse(this)">+ Ajouter une réponse</button>
+        <span class="field-hint">Insensible à la casse et aux accents. Ajoutez toutes les variantes.</span>
+      </div>
+      <div class="field-group">
+        <label>Message si mauvaise réponse</label>
+        <input type="text" class="f-echec" value="${(e.echec||"").replace(/"/g,"&quot;")}">
+      </div>
+      <div class="field-group">
+        <label>Message de validation (bonne réponse)</label>
+        <textarea class="f-victoire" rows="3">${e.victoire||""}</textarea>
+      </div>
+    </div>
+  `;
+
+  // Injecter les réponses
+  const repRow = card.querySelector(".f-reponses");
+  (e.reponses || []).forEach(r => repRow.appendChild(creerTag(r)));
+
+  return card;
+}
+
+function toggleCarte(header) {
+  const body = header.nextElementSibling;
+  const tog  = header.querySelector(".card-toggle");
+  body.classList.toggle("collapsed");
+  tog.textContent = body.classList.contains("collapsed") ? "▶" : "▼";
+}
+window.toggleCarte = toggleCarte;
+
+function creerTag(val) {
+  const tag = document.createElement("div");
+  tag.className = "rep-tag";
+  tag.innerHTML = `<input type="text" value="${(val||"").replace(/"/g,"&quot;")}" placeholder="réponse…">
+                   <button class="del-rep" onclick="this.parentElement.remove()">✕</button>`;
+  return tag;
+}
+
+function ajouterReponse(btn) {
+  const row = btn.previousElementSibling;
+  const tag = creerTag("");
+  row.appendChild(tag);
+  tag.querySelector("input").focus();
+}
+window.ajouterReponse = ajouterReponse;
+
+function collecterEnigmes() {
+  return Array.from(document.querySelectorAll(".enigme-card")).map(card => ({
+    titre:    card.querySelector(".f-titre").value.trim(),
+    intro:    card.querySelector(".f-intro").value.trim(),
+    indice1:  card.querySelector(".f-indice1").value.trim(),
+    indice2:  card.querySelector(".f-indice2").value.trim(),
+    indice3:  card.querySelector(".f-indice3").value.trim(),
+    echec:    card.querySelector(".f-echec").value.trim(),
+    victoire: card.querySelector(".f-victoire").value.trim(),
+    reponses: Array.from(card.querySelectorAll(".f-reponses .rep-tag input"))
+                   .map(i => i.value.trim()).filter(Boolean).map(norm),
+  }));
+}
+
+function monterEnigme(i) {
+  if (i === 0) return;
+  const enigmes = collecterEnigmes();
+  [enigmes[i], enigmes[i-1]] = [enigmes[i-1], enigmes[i]];
+  renderEnigmes(enigmes);
+}
+window.monterEnigme = monterEnigme;
+
+function descendreEnigme(i) {
+  const enigmes = collecterEnigmes();
+  if (i >= enigmes.length - 1) return;
+  [enigmes[i], enigmes[i+1]] = [enigmes[i+1], enigmes[i]];
+  renderEnigmes(enigmes);
+}
+window.descendreEnigme = descendreEnigme;
+
+function supprimerEnigme(i) {
+  if (!confirm("Supprimer cette énigme ?")) return;
+  const enigmes = collecterEnigmes();
+  enigmes.splice(i, 1);
+  renderEnigmes(enigmes);
+}
+window.supprimerEnigme = supprimerEnigme;
+
+function ajouterEnigme() {
+  const enigmes = collecterEnigmes();
+  enigmes.push({
+    titre: `ÉNIGME ${String(enigmes.length+1).padStart(2,"0")} — NOUVEAU`,
+    intro: "", indice1:"", indice2:"", indice3:"",
+    echec: "Réponse incorrecte. Relisez l'énigme.",
+    victoire: ">>> RÉPONSE VALIDÉE <<<\nVerrou désactivé.",
+    reponses: [],
+  });
+  renderEnigmes(enigmes);
+  setTimeout(() => {
+    const ws = document.getElementById("enigmes-container");
+    ws.lastChild?.scrollIntoView({ behavior:"smooth" });
+  }, 150);
+}
+window.ajouterEnigme = ajouterEnigme;
+
+function afficherStatut(msg, cls) {
+  const s = document.getElementById("save-status");
+  s.textContent = msg; s.className = "save-status " + cls;
+  setTimeout(() => { s.textContent = ""; s.className = "save-status"; }, 6000);
+}
+
+// Charger données par défaut dans Firebase si vierge
+async function initFirebaseParDefaut() {
+  const snap = await get(ref(db, "config"));
+  if (!snap.exists()) {
+    const newSession = genSessionId();
+    sessionId = newSession;
+    await set(ref(db, "config"), {
+      motDePasse: "club ados",
+      codeVictoire: "OMEGA-7-LIBRE",
+      msgVictoire: "Félicitations, agent !\nVous avez déverrouillé le système TERMINAL-7.",
+      sessionId: newSession,
+    });
+    await set(ref(db, "enigmes"), [
+      {
+        titre: "ÉNIGME 01 — IDENTIFICATION",
+        intro: "Données chiffrées détectées dans le secteur 7.\nUn scientifique a laissé un message codé :\n\n« Je suis l'inverse du jour, je vis dans la nuit.\nOn me craint, mais je guide les perdus. »\n\nIdentifiez l'entité décrite.",
+        indice1: "L'entité se trouve dans le ciel. Visible la nuit uniquement.",
+        indice2: "Elle émet sa propre lumière. Elle n'a pas besoin du Soleil.",
+        indice3: "Les navigateurs l'utilisaient pour s'orienter. La Polaire en est une.",
+        echec: "Réponse incorrecte. Relisez le message du scientifique.",
+        victoire: ">>> RÉPONSE VALIDÉE <<<\nL'entité est une ÉTOILE.\nVerrou 01 désactivé.",
+        reponses: ["etoile","etoiles","une etoile","les etoiles"],
+      },
+    ]);
+  }
+}
+</script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+
+:root {
+  --green:      #00ff88;
+  --green-dim:  #00aa55;
+  --green-glow: #00ff8866;
+  --red:        #ff3333;
+  --yellow:     #ffcc00;
+  --cyan:       #00eeff;
+  --bg:         #020c04;
+  --bg-panel:   #040e06;
+  --text:       #c8ffd8;
+  --border:     #153018;
+  --admin:      #00ccff;
+  --admin-dim:  #005577;
+  --admin-glow: #00ccff33;
+}
+*, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+input, textarea, select { font-size: max(14px, 1em); }
+html, body { height:100%; }
+body {
+  background:var(--bg); color:var(--text);
+  font-family:'Share Tech Mono',monospace;
+  min-height:100vh; display:flex; flex-direction:column; overflow:hidden;
+}
+
+/* ══ LOGIN ══ */
+#login-screen {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height:100vh; gap:20px; background:var(--bg); padding:30px;
+}
+#login-screen h1 {
+  font-family:'VT323',monospace; font-size:clamp(1.8rem,5vw,3rem);
+  color:var(--admin); letter-spacing:4px;
+  text-shadow:0 0 20px var(--admin-glow);
+}
+#login-screen p { font-size:.75rem; color:var(--admin-dim); letter-spacing:2px; }
+.login-row {
+  display:flex; align-items:center; gap:10px;
+  border:1px solid var(--admin-dim); padding:10px 16px;
+  width:100%; max-width:360px; transition:border-color .2s;
+}
+.login-row:focus-within { border-color:var(--admin); box-shadow:0 0 12px var(--admin-glow); }
+.login-row label { font-size:.68rem; color:var(--admin-dim); letter-spacing:1px; white-space:nowrap; }
+.login-row input {
+  flex:1; background:transparent; border:none; outline:none;
+  color:var(--admin); font-family:'Share Tech Mono',monospace; font-size:.9rem;
+}
+#login-err { font-size:.72rem; color:var(--red); min-height:1.2em; }
+#login-btn {
+  background:transparent; border:1px solid var(--admin); color:var(--admin);
+  font-family:'Share Tech Mono',monospace; font-size:.8rem; padding:10px 30px;
+  cursor:pointer; letter-spacing:3px; transition:all .25s; min-height:44px;
+}
+#login-btn:hover { background:var(--admin); color:#000; }
+
+/* ══ MAIN PANEL ══ */
+#main-panel {
+  display:none; flex-direction:column; height:100vh; overflow:hidden;
+}
+
+/* Top bar */
+#top-bar {
+  display:flex; align-items:center; gap:12px; padding:8px 16px;
+  background:var(--bg-panel); border-bottom:2px solid var(--admin-dim); flex-shrink:0; flex-wrap:wrap;
+}
+#top-bar .brand {
+  font-family:'VT323',monospace; font-size:1.4rem; color:var(--admin);
+  letter-spacing:3px; text-shadow:0 0 10px var(--admin-glow); white-space:nowrap;
+}
+#top-bar .tb-sep { flex:1; }
+.top-btn {
+  background:transparent; border:1px solid var(--admin-dim); color:var(--admin-dim);
+  font-family:'Share Tech Mono',monospace; font-size:.68rem; padding:6px 14px;
+  cursor:pointer; letter-spacing:1px; transition:all .2s; min-height:36px;
+}
+.top-btn:hover { border-color:var(--admin); color:var(--admin); box-shadow:0 0 8px var(--admin-glow); }
+.top-btn.save  { border-color:#00ff8866; color:var(--green); }
+.top-btn.save:hover  { background:#00ff8811; border-color:var(--green); }
+.top-btn.reset { border-color:#ff333355; color:#ff3333; }
+.top-btn.reset:hover { background:#ff333311; border-color:var(--red); }
+.save-status { font-size:.65rem; letter-spacing:1px; }
+.save-status.ok  { color:var(--green); }
+.save-status.err { color:var(--red); }
+
+/* ══ TABS ══ */
+#tabs {
+  display:flex; gap:0; border-bottom:1px solid var(--admin-dim); flex-shrink:0;
+  background:var(--bg-panel);
+}
+.tab-btn {
+  background:transparent; border:none; border-bottom:2px solid transparent;
+  color:var(--admin-dim); font-family:'Share Tech Mono',monospace; font-size:.72rem;
+  padding:10px 20px; cursor:pointer; letter-spacing:2px; transition:all .2s;
+}
+.tab-btn:hover { color:var(--admin); }
+.tab-btn.active { color:var(--admin); border-bottom-color:var(--admin); }
+
+/* ══ CONTENU ONGLETS ══ */
+.tab-content { display:none; flex:1; overflow:hidden; flex-direction:column; }
+.tab-content.active { display:flex; }
+
+/* ── Onglet LIVE ── */
+#tab-live {
+  overflow-y:auto; padding:20px; gap:20px; -webkit-overflow-scrolling:touch;
+}
+.section-title {
+  font-size:.65rem; color:var(--admin); letter-spacing:3px;
+  padding-bottom:6px; border-bottom:1px solid var(--admin-dim); margin-bottom:12px;
+}
+table {
+  width:100%; border-collapse:collapse; font-size:.78rem;
+}
+th {
+  text-align:left; padding:8px 12px; font-size:.62rem; letter-spacing:2px;
+  color:var(--admin-dim); border-bottom:1px solid var(--admin-dim); white-space:nowrap;
+}
+td { padding:8px 12px; border-bottom:1px solid #0a2010; }
+.td-prenom { color:var(--cyan); font-weight:bold; }
+.td-temps  { font-family:'VT323',monospace; font-size:1rem; color:var(--yellow); }
+.td-rank   { font-size:1rem; width:40px; }
+.empty-cell { color:var(--admin-dim); text-align:center; padding:20px; font-style:italic; }
+.badge-ok        { color:var(--green); font-size:.68rem; }
+.badge-en-cours  { color:var(--yellow); font-size:.68rem; }
+tr:hover td { background:rgba(0,204,255,.04); }
+
+/* ── Onglet CONFIG ── */
+#tab-config { overflow-y:auto; padding:20px; gap:16px; -webkit-overflow-scrolling:touch; }
+.config-grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(240px,1fr)); gap:12px;
+  padding:16px; border:1px solid var(--admin-dim); background:rgba(0,15,30,.5);
+  margin-bottom:4px;
+}
+.config-grid .section-title { grid-column:1/-1; margin-bottom:0; }
+.field-group { display:flex; flex-direction:column; gap:5px; }
+.field-group label { font-size:.6rem; color:var(--admin-dim); letter-spacing:2px; text-transform:uppercase; }
+.field-group input,
+.field-group textarea {
+  background:rgba(0,20,40,.8); border:1px solid var(--admin-dim);
+  color:var(--text); font-family:'Share Tech Mono',monospace; font-size:.82rem;
+  padding:8px 10px; outline:none; transition:border-color .2s; resize:vertical; width:100%;
+}
+.field-group input:focus,
+.field-group textarea:focus { border-color:var(--admin); box-shadow:0 0 8px var(--admin-glow); }
+.field-group textarea { min-height:65px; line-height:1.5; }
+.field-hint { font-size:.58rem; color:#334455; letter-spacing:.5px; }
+
+/* ── Onglet ÉNIGMES ── */
+#tab-enigmes { overflow-y:auto; padding:20px; gap:12px; -webkit-overflow-scrolling:touch; }
+.enigme-card { border:1px solid var(--admin-dim); background:rgba(0,15,30,.6); margin-bottom:2px; }
+.enigme-card:focus-within { border-color:var(--admin); }
+.card-header {
+  display:flex; align-items:center; gap:8px; padding:10px 14px;
+  border-bottom:1px solid var(--admin-dim); background:rgba(0,20,40,.4); cursor:pointer; user-select:none;
+}
+.card-num { font-family:'VT323',monospace; font-size:1.3rem; color:var(--admin); min-width:28px; flex-shrink:0; }
+.card-titre-preview { flex:1; font-size:.78rem; color:var(--text); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.card-actions { display:flex; gap:5px; flex-shrink:0; }
+.card-actions button { background:transparent; border:1px solid transparent; font-family:'Share Tech Mono',monospace; font-size:.62rem; padding:4px 8px; cursor:pointer; transition:all .2s; min-height:28px; }
+.btn-move { color:#555; }
+.btn-move:hover { color:var(--admin-dim); border-color:var(--admin-dim); }
+.btn-del { color:#ff333366; }
+.btn-del:hover { color:var(--red); border-color:var(--red); background:#ff333311; }
+.card-toggle { color:var(--admin-dim); font-size:.7rem; flex-shrink:0; }
+.card-body { padding:14px; display:flex; flex-direction:column; gap:12px; }
+.card-body.collapsed { display:none; }
+.indices-grid { display:grid; gap:8px; grid-template-columns:1fr; }
+@media(min-width:700px) { .indices-grid { grid-template-columns:1fr 1fr 1fr; } }
+.idx-field { display:flex; flex-direction:column; gap:4px; }
+.idx-field label { font-size:.58rem; color:var(--admin-dim); letter-spacing:1px; }
+.idx-field textarea { background:rgba(0,20,40,.8); border:1px solid var(--admin-dim); color:var(--text); font-family:'Share Tech Mono',monospace; font-size:.75rem; padding:6px 8px; outline:none; resize:vertical; min-height:48px; line-height:1.4; transition:border-color .2s; width:100%; }
+.idx-field textarea:focus { border-color:var(--admin); }
+.reponses-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.rep-tag { display:flex; align-items:center; gap:5px; border:1px solid var(--admin-dim); padding:4px 8px; color:var(--admin); background:rgba(0,15,30,.8); }
+.rep-tag input { background:transparent; border:none; outline:none; color:var(--admin); font-family:'Share Tech Mono',monospace; font-size:.72rem; width:80px; min-width:0; }
+.rep-tag .del-rep { cursor:pointer; color:#ff333366; border:none; background:none; padding:0; line-height:1; transition:color .2s; min-width:16px; }
+.rep-tag .del-rep:hover { color:var(--red); }
+.add-rep-btn { background:transparent; border:1px dashed var(--admin-dim); color:var(--admin-dim); font-family:'Share Tech Mono',monospace; font-size:.66rem; padding:4px 10px; cursor:pointer; transition:all .2s; min-height:28px; }
+.add-rep-btn:hover { border-color:var(--admin); color:var(--admin); }
+#add-enigme-btn { background:transparent; border:1px dashed var(--admin-dim); color:var(--admin-dim); font-family:'Share Tech Mono',monospace; font-size:.72rem; padding:14px; cursor:pointer; letter-spacing:2px; transition:all .25s; text-align:center; width:100%; min-height:44px; margin-top:4px; }
+#add-enigme-btn:hover { border-color:var(--admin); color:var(--admin); background:rgba(0,204,255,.04); }
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN ══ -->
+<div id="login-screen">
+  <h1>■ TERMINAL-7 // ADMIN</h1>
+  <p>PANNEAU D'ADMINISTRATION — ACCÈS RESTREINT</p>
+  <div class="login-row">
+    <label>MDP ADMIN &gt;</label>
+    <input type="password" id="admin-pwd" placeholder="••••••••">
+  </div>
+  <div id="login-err"></div>
+  <button id="login-btn">AUTHENTIFIER</button>
+</div>
+
+<!-- ══ MAIN ══ -->
+<div id="main-panel">
+
+  <!-- Top bar -->
+  <div id="top-bar">
+    <div class="brand">■ TERMINAL-7 // ADMIN</div>
+    <div class="tb-sep"></div>
+    <button class="top-btn save" onclick="sauvegarder()">✓ SAUVEGARDER DANS FIREBASE</button>
+    <button class="top-btn reset" onclick="reinitialiserJeu()">⚠ RÉINITIALISER LE JEU</button>
+    <span class="save-status" id="save-status"></span>
+  </div>
+
+  <!-- Tabs -->
+  <div id="tabs">
+    <button class="tab-btn active" onclick="showTab('live')">■ EN DIRECT</button>
+    <button class="tab-btn" onclick="showTab('classement')">▲ CLASSEMENT</button>
+    <button class="tab-btn" onclick="showTab('config')">⚙ CONFIG</button>
+    <button class="tab-btn" onclick="showTab('enigmes')">≡ ÉNIGMES</button>
+  </div>
+
+  <!-- Tab : EN DIRECT -->
+  <div class="tab-content active" id="tab-live">
+    <div class="section-title">■ JOUEURS EN COURS — MIS À JOUR EN TEMPS RÉEL</div>
+    <table>
+      <thead>
+        <tr>
+          <th>JOUEUR</th>
+          <th>STATUT</th>
+          <th>ÉTAPE</th>
+          <th>CHRONO</th>
+          <th>INDICES</th>
+        </tr>
+      </thead>
+      <tbody id="joueurs-tbody">
+        <tr><td colspan="5" class="empty-cell">Chargement…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Tab : CLASSEMENT -->
+  <div class="tab-content" id="tab-classement">
+    <div class="section-title">▲ TABLEAU DES SCORES — JOUEURS AYANT TERMINÉ</div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>JOUEUR</th>
+          <th>TEMPS FINAL</th>
+          <th>INDICES UTILISÉS</th>
+        </tr>
+      </thead>
+      <tbody id="classement-tbody">
+        <tr><td colspan="4" class="empty-cell">Aucun joueur n'a terminé</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Tab : CONFIG -->
+  <div class="tab-content" id="tab-config">
+    <div class="config-grid">
+      <div class="section-title">⚙ CONFIGURATION GLOBALE</div>
+      <div class="field-group">
+        <label>Mot de passe joueur</label>
+        <input type="text" id="cfg-mdp" placeholder="ex : club ados">
+        <span class="field-hint">Partagé avec tous les joueurs pour accéder au terminal</span>
+      </div>
+      <div class="field-group">
+        <label>Code de victoire</label>
+        <input type="text" id="cfg-code" placeholder="ex : OMEGA-7-LIBRE">
+        <span class="field-hint">Affiché à l'écran final quand le joueur termine</span>
+      </div>
+      <div class="field-group" style="grid-column:1/-1">
+        <label>Message écran victoire</label>
+        <textarea id="cfg-msg-victoire" rows="3" placeholder="Félicitations, agent !&#10;Vous avez déverrouillé le système."></textarea>
+      </div>
+      <div class="field-group" style="grid-column:1/-1">
+        <label>Message game over (optionnel)</label>
+        <input type="text" id="cfg-msg-gameover" placeholder="TEMPS ÉCOULÉ — SYSTÈME COMPROMIS">
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab : ÉNIGMES -->
+  <div class="tab-content" id="tab-enigmes">
+    <div class="section-title">≡ GESTION DES ÉNIGMES</div>
+    <div id="enigmes-container"></div>
+    <button id="add-enigme-btn" onclick="ajouterEnigme()">+ AJOUTER UNE ÉNIGME</button>
+  </div>
+
+</div>
+
+<script>
+// Gestion des onglets
+function showTab(name) {
+  document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  event.target.classList.add("active");
+}
+window.showTab = showTab;
+</script>
+</body>
+</html>
