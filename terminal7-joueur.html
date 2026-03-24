@@ -134,32 +134,67 @@ function setPrompt(txt, type="text", placeholder="") {
 }
 
 // ══════════════════════════════════════════════════════
-// CHRONOMÈTRE
+// CHRONOMÈTRE — basé sur l'heure de démarrage Firebase
+// Le temps réel = (maintenant - startedAt) + penaliteSecondes
+// Même déconnecté, le chrono continue de tourner.
 // ══════════════════════════════════════════════════════
+let chronoStartedAt    = null;  // Date.now() au moment du démarrage
+let chronoPenalites    = 0;     // secondes de pénalités cumulées
+
+function secondesEcoulees() {
+  if (!chronoStartedAt) return chronoPenalites;
+  return Math.floor((Date.now() - chronoStartedAt) / 1000) + chronoPenalites;
+}
+
 function majChrono() {
+  secondes = secondesEcoulees();
   document.getElementById("cd-display").textContent = fmt(secondes);
 }
+
 function demarrerChrono() {
   if (timerInterval) return;
   timerInterval = setInterval(() => {
-    secondes++;
     majChrono();
-    if (secondes % 10 === 0) sauvegarderTemps();
+    // Sauvegarde toutes les 15s (on sauvegarde penalites + startedAt, pas le temps calculé)
+    if (Math.floor((Date.now() - chronoStartedAt) / 1000) % 15 === 0) {
+      sauvegarderTemps();
+    }
   }, 1000);
 }
+
 function stopChrono() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
 }
-function ajouterPenalite(minutes, raison) {
-  secondes += minutes * 60;
+
+function ajouterPenalite(minutes) {
+  chronoPenalites += minutes * 60;
   majChrono();
   const w = document.getElementById("countdown");
   w.classList.add("penalite");
   setTimeout(() => w.classList.remove("penalite"), 1000);
+  // Sauvegarde immédiate des pénalités
+  sauvegarderTemps();
 }
+
 function sauvegarderTemps() {
   if (!joueurId || !sessionId) return;
-  update(ref(db, `joueurs/${sessionId}/${joueurId}`), { tempsSecondes: secondes }).catch(()=>{});
+  update(ref(db, `joueurs/${sessionId}/${joueurId}`), {
+    chronoStartedAt: chronoStartedAt,
+    chronoPenalites: chronoPenalites,
+    tempsSecondes:   secondesEcoulees(), // pour l'affichage admin
+  }).catch(() => {});
+}
+
+// Démarre le chrono pour un nouveau joueur
+function initChronoNouveauJoueur() {
+  chronoStartedAt = Date.now();
+  chronoPenalites = 0;
+}
+
+// Restaure le chrono depuis Firebase (reconnexion)
+function restaurerChrono(data) {
+  chronoStartedAt = data.chronoStartedAt || Date.now();
+  chronoPenalites = data.chronoPenalites || 0;
 }
 
 // ══════════════════════════════════════════════════════
@@ -350,14 +385,16 @@ async function traiterConfirmMdp(saisie) {
     await set(ref(db, `joueurs/${sessionId}/${joueurId}`), {
       prenom,
       joueurId,
-      mdpHash:       btoa(mdpJoueur), // encodage basique pour vérification
-      mdpClair:      mdpJoueur,        // mot de passe en clair visible par l'admin
-      enigmeIdx:     0,
-      indiceIdx:     0,
-      tempsSecondes: 0,
-      fini:          false,
+      mdpHash:         btoa(mdpJoueur),
+      mdpClair:        mdpJoueur,
+      enigmeIdx:       0,
+      indiceIdx:       0,
+      tempsSecondes:   0,
+      chronoStartedAt: null,   // sera défini au démarrage du jeu
+      chronoPenalites: 0,
+      fini:            false,
       sessionId,
-      connecteAt:    Date.now(),
+      connecteAt:      Date.now(),
     });
     enigmeIdx = 0;
     indiceIdx = 0;
@@ -405,11 +442,14 @@ async function traiterReconnexionMdp(saisie) {
   }
 
   // Mot de passe OK → reprendre la progression
-  mdpJoueur = saisie;
-  enigmeIdx = data.enigmeIdx     || 0;
-  indiceIdx = data.indiceIdx     || 0;
-  secondes  = data.tempsSecondes || 0;
+  mdpJoueur     = saisie;
+  enigmeIdx     = data.enigmeIdx  || 0;
+  indiceIdx     = data.indiceIdx  || 0;
   codeSessionOk = data.codeSessionOk || false;
+
+  // Restaurer le chrono depuis Firebase (continue de tourner même déconnecté)
+  restaurerChrono(data);
+  secondes = secondesEcoulees();
 
   // Charger les notes sauvegardées
   if (data.notes) chargerNotes(data.notes);
@@ -494,6 +534,17 @@ async function lancerJeu() {
   phase = "jeu";
   enAttente = true;
   majProgression();
+
+  // Démarrer le chrono seulement si pas encore commencé
+  if (!chronoStartedAt) {
+    initChronoNouveauJoueur();
+    // Sauvegarder le startedAt dans Firebase immédiatement
+    await update(ref(db, `joueurs/${sessionId}/${joueurId}`), {
+      chronoStartedAt: chronoStartedAt,
+      chronoPenalites: 0,
+    });
+  }
+
   majChrono();
   demarrerChrono();
   ecouterReset();

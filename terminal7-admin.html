@@ -110,14 +110,23 @@ function fmt(s) {
 }
 
 // Chronomètres locaux pour les joueurs actifs
-function demarrerLiveTimer(id, base) {
+function demarrerLiveTimer(id, data) {
   if (liveTimers[id]) clearInterval(liveTimers[id]);
-  const startedAt = Date.now();
+
+  // Calcul du temps réel basé sur chronoStartedAt + penalites
+  const startedAt  = data.chronoStartedAt || null;
+  const penalites  = data.chronoPenalites || 0;
+
   liveTimers[id] = setInterval(() => {
     const el = document.getElementById("timer-" + id);
     if (el) {
-      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      el.textContent = fmt(base + elapsed);
+      let t;
+      if (startedAt) {
+        t = Math.floor((Date.now() - startedAt) / 1000) + penalites;
+      } else {
+        t = data.tempsSecondes || 0;
+      }
+      el.textContent = fmt(Math.max(0, t));
     } else {
       clearInterval(liveTimers[id]);
     }
@@ -164,7 +173,7 @@ function renderJoueurs(data) {
 
       // Démarrer le timer live si le joueur n'a pas fini
       if (!j.fini) {
-        demarrerLiveTimer(j.joueurId, j.tempsSecondes || 0);
+        demarrerLiveTimer(j.joueurId, j);
       }
     });
   });
