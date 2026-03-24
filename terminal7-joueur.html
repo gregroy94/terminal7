@@ -307,8 +307,8 @@ async function traiterPrenom(saisie) {
   }
   enAttente = true;
   ligne(`PRÉNOM > ${saisie}`, "input");
-  prenom    = saisie.trim();
-  joueurId  = norm(prenom).replace(/\s+/g, "_");
+  prenom   = saisie.trim();
+  joueurId = norm(prenom).replace(/\s+/g, "_");
 
   await analyse();
 
@@ -316,15 +316,55 @@ async function traiterPrenom(saisie) {
   const snap = await get(ref(db, `joueurs/${sessionId}/${joueurId}`));
 
   if (snap.exists()) {
-    // Joueur connu → reconnexion
-    ligne("", "info");
-    await typing(`Identifiant « ${prenom} » reconnu.`, "success");
-    await typing("Entrez votre mot de passe personnel pour reprendre.", "info");
-    ligne("", "info");
-    setPrompt("MOT DE PASSE >", "password", "Votre mot de passe…");
-    phase = "saisie-mdp-reconnexion";
+    const data = snap.val();
+
+    // Vérifier si une session est déjà active sur un autre appareil
+    if (data.sessionActive) {
+      ligne("", "info");
+      await seq([
+        `⚠ Le prénom « ${prenom} » est déjà connecté sur un autre appareil.`,
+        "Si c'est vous, entrez votre mot de passe pour reprendre.",
+        "Sinon, choisissez un autre prénom.",
+      ], "warning");
+      ligne("", "info");
+      // On lui propose quand même de se connecter avec son mot de passe
+      // car c'est peut-être lui qui s'est déconnecté sans fermer l'autre onglet
+      await typing("Entrez votre mot de passe pour reprendre votre session.", "info");
+      ligne("", "info");
+      setPrompt("MOT DE PASSE >", "password", "Votre mot de passe…");
+      phase = "saisie-mdp-reconnexion";
+    } else {
+      // Joueur connu, pas de session active → reconnexion normale
+      ligne("", "info");
+      await typing(`Identifiant « ${prenom} » reconnu.`, "success");
+      await typing("Entrez votre mot de passe personnel pour reprendre.", "info");
+      ligne("", "info");
+      setPrompt("MOT DE PASSE >", "password", "Votre mot de passe…");
+      phase = "saisie-mdp-reconnexion";
+    }
   } else {
-    // Nouveau joueur → création de mot de passe
+    // Nouveau joueur — vérifier que ce prénom n'est pas déjà pris
+    // (cas où quelqu'un d'autre utilise ce prénom dans la session)
+    const tousSnap = await get(ref(db, `joueurs/${sessionId}`));
+    if (tousSnap.exists()) {
+      const tous = tousSnap.val();
+      const prenomPris = Object.values(tous).some(
+        j => norm(j.prenom || "") === norm(prenom)
+      );
+      if (prenomPris) {
+        ligne("", "info");
+        await seq([
+          `⚠ Le prénom « ${prenom} » est déjà utilisé par un autre joueur.`,
+          "Choisissez un prénom différent.",
+        ], "error");
+        ligne("", "info");
+        setPrompt("PRÉNOM >", "text", "Votre prénom…");
+        phase = "saisie-prenom";
+        enAttente = false;
+        return;
+      }
+    }
+    // Prénom disponible → création
     ligne("", "info");
     await typing(`Bienvenue, ${prenom}.`, "success");
     await typing("Créez un mot de passe personnel (minimum 3 caractères).", "info");
@@ -390,9 +430,10 @@ async function traiterConfirmMdp(saisie) {
       enigmeIdx:       0,
       indiceIdx:       0,
       tempsSecondes:   0,
-      chronoStartedAt: null,   // sera défini au démarrage du jeu
+      chronoStartedAt: null,
       chronoPenalites: 0,
       fini:            false,
+      sessionActive:   true,
       sessionId,
       connecteAt:      Date.now(),
     });
@@ -453,6 +494,9 @@ async function traiterReconnexionMdp(saisie) {
 
   // Charger les notes sauvegardées
   if (data.notes) chargerNotes(data.notes);
+
+  // Marquer la session comme active
+  await update(ref(db, `joueurs/${sessionId}/${joueurId}`), { sessionActive: true });
 
   ligne("", "info");
   await seq([
@@ -760,6 +804,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.addEventListener("click", () => {
     if (phase !== "fini" && phase !== "reset") INPUT_EL.focus();
+  });
+
+  // Marquer sessionActive = false quand le joueur ferme/quitte la page
+  window.addEventListener("beforeunload", () => {
+    if (joueurId && sessionId) {
+      const url = `https://terminal-7-8d201-default-rtdb.europe-west1.firebasedatabase.app/joueurs/${sessionId}/${joueurId}/sessionActive.json`;
+      navigator.sendBeacon(url, JSON.stringify(false));
+    }
   });
 
   // Charger config Firebase puis démarrer
