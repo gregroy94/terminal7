@@ -65,13 +65,14 @@ let enigmeIdx     = 0;
 let indiceIdx     = 0;
 let enAttente     = false;
 // phases : "saisie-prenom" | "saisie-mdp-nouveau" | "saisie-mdp-confirm" |
-//          "saisie-mdp-reconnexion" | "jeu" | "fini" | "reset"
+//          "saisie-mdp-reconnexion" | "saisie-code-session" | "jeu" | "fini" | "reset"
 let phase         = "saisie-prenom";
 let timerInterval = null;
 let secondes      = 0;
 let ENIGMES       = [];
 let CONFIG        = {};
 let mdpTemp       = "";   // stockage temporaire du mdp lors de la création
+let codeSessionOk = false; // true si le joueur a déjà validé le code de session
 
 let OUTPUT, INPUT_EL, PROMPT_EL;
 
@@ -349,7 +350,8 @@ async function traiterConfirmMdp(saisie) {
     await set(ref(db, `joueurs/${sessionId}/${joueurId}`), {
       prenom,
       joueurId,
-      mdpHash:       btoa(mdpJoueur), // encodage basique
+      mdpHash:       btoa(mdpJoueur), // encodage basique pour vérification
+      mdpClair:      mdpJoueur,        // mot de passe en clair visible par l'admin
       enigmeIdx:     0,
       indiceIdx:     0,
       tempsSecondes: 0,
@@ -365,11 +367,11 @@ async function traiterConfirmMdp(saisie) {
     await seq([
       "Mot de passe enregistré.",
       `Identité créée : ${prenom.toUpperCase()}`,
-      "Accès au système accordé.",
     ], "success");
-    await pause(400);
+    await pause(300);
     sep();
-    await lancerJeu();
+    // → Demander le code de session
+    await phaseCodeSession();
   } catch(e) {
     ligne("⚠ Erreur Firebase : " + e.message, "error");
     enAttente = false;
@@ -407,6 +409,7 @@ async function traiterReconnexionMdp(saisie) {
   enigmeIdx = data.enigmeIdx     || 0;
   indiceIdx = data.indiceIdx     || 0;
   secondes  = data.tempsSecondes || 0;
+  codeSessionOk = data.codeSessionOk || false;
 
   // Charger les notes sauvegardées
   if (data.notes) chargerNotes(data.notes);
@@ -415,7 +418,69 @@ async function traiterReconnexionMdp(saisie) {
   await seq([
     "Authentification réussie.",
     `Bon retour, ${prenom.toUpperCase()}.`,
-    `Reprise à l'énigme ${enigmeIdx + 1} — Chrono : ${fmt(secondes)}`,
+  ], "success");
+  await pause(300);
+  sep();
+
+  // Si le joueur n'a pas encore validé le code de session → le demander
+  if (!codeSessionOk) {
+    await phaseCodeSession();
+  } else {
+    await typing(`Reprise à l'énigme ${enigmeIdx + 1} — Chrono : ${fmt(secondes)}`, "system");
+    await pause(400);
+    sep();
+    await lancerJeu();
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// PHASE 4 — CODE DE SESSION (1ère épreuve)
+// ══════════════════════════════════════════════════════
+async function phaseCodeSession() {
+  phase = "saisie-code-session";
+  enAttente = true;
+
+  await typing("ACCÈS RESTREINT — NIVEAU 1", "warning", 22);
+  sep();
+  await pause(200);
+  await seq([
+    "Un code d'accès est requis pour pénétrer ce système.",
+    "Ce code vous a été communiqué par votre superviseur.",
+    "",
+  ], "info");
+
+  setPrompt("CODE D'ACCÈS >", "password", "Entrez le code…");
+  enAttente = false;
+}
+
+async function traiterCodeSession(saisie) {
+  enAttente = true;
+  ligne("CODE D'ACCÈS > " + "•".repeat(saisie.length), "input");
+  await analyse();
+
+  if (norm(saisie) !== norm(CONFIG.motDePasse)) {
+    ligne("", "info");
+    await seq([
+      "⚠ CODE INVALIDE.",
+      "Accès refusé. Réessayez.",
+    ], "error");
+    ligne("", "info");
+    setPrompt("CODE D'ACCÈS >", "password", "Entrez le code…");
+    enAttente = false;
+    return;
+  }
+
+  // Code correct → marquer dans Firebase et lancer le jeu
+  codeSessionOk = true;
+  await update(ref(db, `joueurs/${sessionId}/${joueurId}`), {
+    codeSessionOk: true,
+  });
+
+  ligne("", "info");
+  await seq([
+    "✓ CODE ACCEPTÉ.",
+    "Accès au système autorisé.",
+    "Initialisation en cours...",
   ], "success");
   await pause(400);
   sep();
@@ -613,6 +678,7 @@ async function traiterSaisie(saisie) {
     case "saisie-mdp-nouveau":     await traiterNouveauMdp(saisie);     break;
     case "saisie-mdp-confirm":     await traiterConfirmMdp(saisie);     break;
     case "saisie-mdp-reconnexion": await traiterReconnexionMdp(saisie); break;
+    case "saisie-code-session":    await traiterCodeSession(saisie);    break;
     case "jeu":                    await traiterSaisieJeu(saisie);       break;
   }
 }

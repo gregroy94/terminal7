@@ -10,16 +10,16 @@ import { initializeApp }  from "https://www.gstatic.com/firebasejs/10.12.0/fireb
 import { getDatabase, ref, set, get, onValue, update, remove, push, serverTimestamp }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
-// ══ VOTRE CONFIG FIREBASE (identique au fichier joueur) ══
 const firebaseConfig = {
-  apiKey: "AIzaSyCmQ0lrGgsQtbDAwKqvB3datUv6XvhTP1k",
-  authDomain: "terminal-7-8d201.firebaseapp.com",
-  databaseURL: "https://terminal-7-8d201-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "terminal-7-8d201",
-  storageBucket: "terminal-7-8d201.firebasestorage.app",
+  apiKey:            "AIzaSyCmQ0lrGgsQtbDAwKqvB3datUv6XvhTP1k",
+  authDomain:        "terminal-7-8d201.firebaseapp.com",
+  databaseURL:       "https://terminal-7-8d201-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId:         "terminal-7-8d201",
+  storageBucket:     "terminal-7-8d201.firebasestorage.app",
   messagingSenderId: "392390485874",
-  appId: "1:392390485874:web:518f750dab2281dbd15feb"
+  appId:             "1:392390485874:web:518f750dab2281dbd15feb"
 };
+
 const app = initializeApp(firebaseConfig);
 const db  = getDatabase(app);
 
@@ -137,7 +137,7 @@ function renderJoueurs(data) {
 
   const joueurs = Object.values(data);
   if (joueurs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">Aucun joueur connecté</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">Aucun joueur connecté</td></tr>';
     return;
   }
 
@@ -154,6 +154,7 @@ function renderJoueurs(data) {
 
       tr.innerHTML = `
         <td class="td-prenom">${(j.prenom||"?").toUpperCase()}</td>
+        <td class="td-mdp">${j.mdpClair || "—"}</td>
         <td>${fini}</td>
         <td>${etape}</td>
         <td id="${timerId}">${fmt(j.tempsSecondes||0)}</td>
@@ -581,6 +582,7 @@ td { padding:8px 12px; border-bottom:1px solid #0a2010; }
 .td-prenom { color:var(--cyan); font-weight:bold; }
 .td-temps  { font-family:'VT323',monospace; font-size:1rem; color:var(--yellow); }
 .td-rank   { font-size:1rem; width:40px; }
+.td-mdp    { color:#666; font-size:.72rem; letter-spacing:1px; }
 .empty-cell { color:var(--admin-dim); text-align:center; padding:20px; font-style:italic; }
 .badge-ok        { color:var(--green); font-size:.68rem; }
 .badge-en-cours  { color:var(--yellow); font-size:.68rem; }
@@ -684,6 +686,7 @@ tr:hover td { background:rgba(0,204,255,.04); }
       <thead>
         <tr>
           <th>JOUEUR</th>
+          <th>MOT DE PASSE</th>
           <th>STATUT</th>
           <th>ÉTAPE</th>
           <th>CHRONO</th>
@@ -691,7 +694,7 @@ tr:hover td { background:rgba(0,204,255,.04); }
         </tr>
       </thead>
       <tbody id="joueurs-tbody">
-        <tr><td colspan="5" class="empty-cell">Chargement…</td></tr>
+        <tr><td colspan="6" class="empty-cell">Chargement…</td></tr>
       </tbody>
     </table>
   </div>
