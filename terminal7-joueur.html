@@ -2,46 +2,77 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>TERMINAL-7 // ACCÈS JOUEUR</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>TERMINAL-7</title>
 
-<!-- ══════════════════════════════════════════════════
-     FIREBASE — remplacez par VOS clés de config
-══════════════════════════════════════════════════ -->
+<!-- ══ PWA — Web App installable ══ -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TERMINAL-7">
+<meta name="theme-color" content="#050f07">
+
+<!-- Icône app (affichée sur l'écran d'accueil du téléphone) -->
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23050f07'/><text y='70' x='10' font-size='60' fill='%2300ff88'>T7</text></svg>">
+
+<!-- Manifest inline pour PWA -->
+<script>
+const manifestData = {
+  name: "TERMINAL-7",
+  short_name: "T-7",
+  description: "Escape game terminal sécurisé",
+  start_url: "./terminal7-joueur.html",
+  display: "standalone",
+  background_color: "#050f07",
+  theme_color: "#050f07",
+  orientation: "portrait",
+  icons: [
+    { src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' fill='%23050f07'/><text y='140' x='20' font-size='120' fill='%2300ff88' font-family='monospace'>T7</text></svg>", sizes: "192x192", type: "image/svg+xml" },
+    { src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' fill='%23050f07'/><text y='380' x='50' font-size='320' fill='%2300ff88' font-family='monospace'>T7</text></svg>", sizes: "512x512", type: "image/svg+xml" }
+  ]
+};
+const blob = new Blob([JSON.stringify(manifestData)], {type: "application/json"});
+const manifestURL = URL.createObjectURL(blob);
+document.write('<link rel="manifest" href="' + manifestURL + '">');
+</script>
+
 <script type="module">
-import { initializeApp }         from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getDatabase, ref, set, get, onValue, update, serverTimestamp }
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, set, get, onValue, update }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
-// ══ VOTRE CONFIG FIREBASE (à remplacer) ══
 const firebaseConfig = {
-  apiKey: "AIzaSyCmQ0lrGgsQtbDAwKqvB3datUv6XvhTP1k",
-  authDomain: "terminal-7-8d201.firebaseapp.com",
-  databaseURL: "https://terminal-7-8d201-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "terminal-7-8d201",
-  storageBucket: "terminal-7-8d201.firebasestorage.app",
+  apiKey:            "AIzaSyCmQ0lrGgsQtbDAwKqvB3datUv6XvhTP1k",
+  authDomain:        "terminal-7-8d201.firebaseapp.com",
+  databaseURL:       "https://terminal-7-8d201-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId:         "terminal-7-8d201",
+  storageBucket:     "terminal-7-8d201.firebasestorage.app",
   messagingSenderId: "392390485874",
-  appId: "1:392390485874:web:518f750dab2281dbd15feb"
+  appId:             "1:392390485874:web:518f750dab2281dbd15feb"
 };
+
 const app = initializeApp(firebaseConfig);
 const db  = getDatabase(app);
 
 // ══════════════════════════════════════════════════════
-// ÉTAT LOCAL
+// ÉTAT
 // ══════════════════════════════════════════════════════
-let joueurId      = null;   // clé du joueur dans Firebase
+let joueurId      = null;
 let prenom        = null;
-let sessionId     = null;   // ID de session courante (pour reset)
+let mdpJoueur     = null;
+let sessionId     = null;
 let enigmeIdx     = 0;
 let indiceIdx     = 0;
 let enAttente     = false;
-let phase         = "login"; // login | jeu | fini
+// phases : "saisie-prenom" | "saisie-mdp-nouveau" | "saisie-mdp-confirm" |
+//          "saisie-mdp-reconnexion" | "jeu" | "fini" | "reset"
+let phase         = "saisie-prenom";
 let timerInterval = null;
-let secondes      = 0;      // chrono en secondes
-let ENIGMES       = [];     // chargées depuis Firebase
-let CONFIG        = {};     // config depuis Firebase
+let secondes      = 0;
+let ENIGMES       = [];
+let CONFIG        = {};
+let mdpTemp       = "";   // stockage temporaire du mdp lors de la création
 
-// Éléments DOM
 let OUTPUT, INPUT_EL, PROMPT_EL;
 
 // ══════════════════════════════════════════════════════
@@ -51,10 +82,10 @@ function norm(s) {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
 }
 function fmt(s) {
-  const h  = String(Math.floor(s/3600)).padStart(2,"0");
-  const m  = String(Math.floor((s%3600)/60)).padStart(2,"0");
-  const sc = String(s%60).padStart(2,"0");
-  return `${h}:${m}:${sc}`;
+  s = Math.max(0, s);
+  return String(Math.floor(s/3600)).padStart(2,"0") + ":" +
+         String(Math.floor((s%3600)/60)).padStart(2,"0") + ":" +
+         String(s%60).padStart(2,"0");
 }
 function pause(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -66,9 +97,9 @@ function ligne(txt, cls="info") {
   OUTPUT.scrollTop = OUTPUT.scrollHeight;
   return d;
 }
-function sep() { ligne("─".repeat(46), "sep"); }
+function sep() { ligne("─".repeat(44), "sep"); }
 
-function typing(txt, cls="info", v=24) {
+function typing(txt, cls="info", v=22) {
   return new Promise(resolve => {
     const d = document.createElement("div");
     d.className = "line " + cls;
@@ -85,14 +116,20 @@ function typing(txt, cls="info", v=24) {
   });
 }
 async function seq(lignes, cls="info") {
-  for (const l of lignes) { await typing(l, cls); await pause(50); }
+  for (const l of lignes) { await typing(l, cls); await pause(45); }
 }
 async function seqML(txt, cls="info") {
-  await seq(txt.split("\n"), cls);
+  for (const l of txt.split("\n")) { await typing(l, cls); await pause(45); }
 }
 async function analyse() {
   const d = ligne("Analyse en cours...", "system");
-  await pause(800); d.remove();
+  await pause(700); d.remove();
+}
+function setPrompt(txt, type="text", placeholder="") {
+  PROMPT_EL.textContent = txt;
+  INPUT_EL.type = type;
+  INPUT_EL.placeholder = placeholder;
+  setTimeout(() => INPUT_EL.focus(), 100);
 }
 
 // ══════════════════════════════════════════════════════
@@ -101,37 +138,31 @@ async function analyse() {
 function majChrono() {
   document.getElementById("cd-display").textContent = fmt(secondes);
 }
-
 function demarrerChrono() {
   if (timerInterval) return;
   timerInterval = setInterval(() => {
     secondes++;
     majChrono();
-    // Sauvegarde le temps toutes les 10s dans Firebase
     if (secondes % 10 === 0) sauvegarderTemps();
   }, 1000);
 }
-
 function stopChrono() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
 }
-
-function ajouterPenalite(minutes) {
+function ajouterPenalite(minutes, raison) {
   secondes += minutes * 60;
   majChrono();
   const w = document.getElementById("countdown");
-  w.style.color = "#ff0000";
-  setTimeout(() => { w.style.color = ""; }, 800);
+  w.classList.add("penalite");
+  setTimeout(() => w.classList.remove("penalite"), 1000);
 }
-
 function sauvegarderTemps() {
-  if (!joueurId) return;
-  update(ref(db, `joueurs/${sessionId}/${joueurId}`), { tempsSecondes: secondes })
-    .catch(() => {});
+  if (!joueurId || !sessionId) return;
+  update(ref(db, `joueurs/${sessionId}/${joueurId}`), { tempsSecondes: secondes }).catch(()=>{});
 }
 
 // ══════════════════════════════════════════════════════
-// PROGRESSION (barre de points)
+// PROGRESSION
 // ══════════════════════════════════════════════════════
 function majProgression() {
   const bar = document.getElementById("progress-bar");
@@ -144,53 +175,46 @@ function majProgression() {
 }
 
 // ══════════════════════════════════════════════════════
-// FIREBASE — LECTURE CONFIG & ÉNIGMES
+// FIREBASE — CHARGEMENT
 // ══════════════════════════════════════════════════════
 async function chargerConfig() {
   const snap = await get(ref(db, "config"));
-  if (!snap.exists()) throw new Error("Config introuvable dans Firebase.");
+  if (!snap.exists()) throw new Error("Config introuvable. Vérifiez Firebase.");
   CONFIG = snap.val();
+  sessionId = CONFIG.sessionId;
 
   const snapE = await get(ref(db, "enigmes"));
-  if (!snapE.exists()) throw new Error("Énigmes introuvables dans Firebase.");
-  // Firebase stocke les tableaux comme objets — on convertit
+  if (!snapE.exists()) throw new Error("Énigmes introuvables. Vérifiez Firebase.");
   const raw = snapE.val();
   ENIGMES = Array.isArray(raw) ? raw : Object.values(raw);
 }
 
 // ══════════════════════════════════════════════════════
 // ÉCOUTE RESET EN TEMPS RÉEL
-// Quand l'admin réinitialise, sessionId change → joueur déconnecté
 // ══════════════════════════════════════════════════════
 function ecouterReset() {
-  onValue(ref(db, "config/sessionId"), (snap) => {
+  onValue(ref(db, "config/sessionId"), snap => {
     const newSession = snap.val();
-    if (newSession && newSession !== sessionId && phase !== "login") {
+    if (newSession && newSession !== sessionId && phase !== "saisie-prenom") {
       stopChrono();
-      afficherReset();
+      phase = "reset";
+      OUTPUT.innerHTML = "";
+      sep();
+      seq([
+        "⚠ SYSTÈME RÉINITIALISÉ PAR L'ADMINISTRATEUR.",
+        "Votre session a été terminée.",
+        "Rechargez la page pour une nouvelle partie.",
+      ], "error");
+      sep();
+      document.getElementById("input-area").style.display = "none";
     }
   });
 }
 
-async function afficherReset() {
-  phase = "reset";
-  OUTPUT.innerHTML = "";
-  sep();
-  await seq([
-    "⚠ SYSTÈME RÉINITIALISÉ PAR L'ADMINISTRATEUR.",
-    "Votre session a été terminée.",
-    "Rechargez la page pour recommencer.",
-  ], "error");
-  sep();
-  document.getElementById("input-area").style.display = "none";
-}
-
 // ══════════════════════════════════════════════════════
-// PHASE LOGIN
+// BANNIÈRE
 // ══════════════════════════════════════════════════════
-async function phaseLogin() {
-  phase = "login"; enAttente = true;
-
+function afficherBanniere() {
   const isMobile = window.innerWidth < 500;
   const b = isMobile ? [
     "  ████████╗███████╗██████╗ ███╗   ███╗",
@@ -214,111 +238,200 @@ async function phaseLogin() {
     "  ══════════════════════════════════════════════════════════════════",
   ];
   b.forEach(l => ligne(l, "art"));
-  await pause(300);
-
-  await seq(["", "Connexion au réseau sécurisé...", ""], "system");
-  sep();
-  await typing("IDENTIFICATION REQUISE", "warning", 22);
-  sep();
-  await pause(200);
-  await typing("Entrez votre PRÉNOM pour vous identifier.", "info");
-  ligne("", "info");
-
-  PROMPT_EL.textContent = "PRÉNOM >";
-  INPUT_EL.type = "text";
-  INPUT_EL.placeholder = "Votre prénom…";
-  enAttente = false;
 }
 
 // ══════════════════════════════════════════════════════
-// PHASE MOT DE PASSE
+// PHASE 1 — SAISIE PRÉNOM
 // ══════════════════════════════════════════════════════
-async function phaseMdp(nomJoueur) {
-  prenom = nomJoueur;
-  await typing(`Bonjour, ${prenom}.`, "info");
-  await pause(200);
-  await typing("Entrez le mot de passe de la session.", "info");
-  ligne("", "info");
-  PROMPT_EL.textContent = "MOT DE PASSE >";
-  INPUT_EL.type = "password";
-  INPUT_EL.placeholder = "••••••••";
-  phase = "mdp";
-  enAttente = false;
-}
-
-// ══════════════════════════════════════════════════════
-// VÉRIFICATION MOT DE PASSE & CONNEXION
-// ══════════════════════════════════════════════════════
-async function verifierConnexion(mdp) {
+async function phaseLogin() {
+  phase = "saisie-prenom";
   enAttente = true;
-  ligne("MOT DE PASSE > " + "•".repeat(mdp.length), "input");
+
+  afficherBanniere();
+  await pause(300);
+  await seq(["", "Connexion au réseau sécurisé...", "Protocole d'identification activé.", ""], "system");
+  sep();
+  await typing("NOUVELLE IDENTIFICATION", "warning", 22);
+  sep();
+  await pause(200);
+  await typing("Entrez votre PRÉNOM pour commencer.", "info");
+  ligne("", "info");
+
+  setPrompt("PRÉNOM >", "text", "Votre prénom…");
+  enAttente = false;
+}
+
+// ══════════════════════════════════════════════════════
+// PHASE 2 — CRÉATION OU RECONNEXION
+// ══════════════════════════════════════════════════════
+async function traiterPrenom(saisie) {
+  if (saisie.length < 2) {
+    ligne("⚠ Prénom trop court.", "error");
+    return;
+  }
+  enAttente = true;
+  ligne(`PRÉNOM > ${saisie}`, "input");
+  prenom    = saisie.trim();
+  joueurId  = norm(prenom).replace(/\s+/g, "_");
+
   await analyse();
 
-  if (norm(mdp) !== norm(CONFIG.motDePasse)) {
+  // Chercher si le joueur existe déjà dans la session courante
+  const snap = await get(ref(db, `joueurs/${sessionId}/${joueurId}`));
+
+  if (snap.exists()) {
+    // Joueur connu → reconnexion
     ligne("", "info");
-    await seq(["⚠ MOT DE PASSE INCORRECT.", "Réessayez."], "error");
+    await typing(`Identifiant « ${prenom} » reconnu.`, "success");
+    await typing("Entrez votre mot de passe personnel pour reprendre.", "info");
     ligne("", "info");
+    setPrompt("MOT DE PASSE >", "password", "Votre mot de passe…");
+    phase = "saisie-mdp-reconnexion";
+  } else {
+    // Nouveau joueur → création de mot de passe
+    ligne("", "info");
+    await typing(`Bienvenue, ${prenom}.`, "success");
+    await typing("Créez un mot de passe personnel (minimum 3 caractères).", "info");
+    await typing("Vous en aurez besoin si vous vous déconnectez.", "system");
+    ligne("", "info");
+    setPrompt("NOUVEAU MOT DE PASSE >", "password", "Choisissez un mot de passe…");
+    phase = "saisie-mdp-nouveau";
+  }
+  enAttente = false;
+}
+
+// ══════════════════════════════════════════════════════
+// PHASE 3a — CRÉATION MOT DE PASSE (nouveau joueur)
+// ══════════════════════════════════════════════════════
+async function traiterNouveauMdp(saisie) {
+  if (saisie.length < 3) {
+    ligne("⚠ Mot de passe trop court (3 caractères minimum).", "error");
+    return;
+  }
+  enAttente = true;
+  ligne("NOUVEAU MOT DE PASSE > " + "•".repeat(saisie.length), "input");
+  mdpTemp = saisie;
+
+  await typing("Confirmez votre mot de passe.", "info");
+  ligne("", "info");
+  setPrompt("CONFIRMATION >", "password", "Répétez votre mot de passe…");
+  phase = "saisie-mdp-confirm";
+  enAttente = false;
+}
+
+// ══════════════════════════════════════════════════════
+// PHASE 3b — CONFIRMATION MOT DE PASSE
+// ══════════════════════════════════════════════════════
+async function traiterConfirmMdp(saisie) {
+  enAttente = true;
+  ligne("CONFIRMATION > " + "•".repeat(saisie.length), "input");
+
+  if (saisie !== mdpTemp) {
+    ligne("", "info");
+    await seq(["⚠ Les mots de passe ne correspondent pas.", "Recommencez."], "error");
+    ligne("", "info");
+    mdpTemp = "";
+    await typing("Créez un mot de passe personnel (minimum 3 caractères).", "info");
+    ligne("", "info");
+    setPrompt("NOUVEAU MOT DE PASSE >", "password", "Choisissez un mot de passe…");
+    phase = "saisie-mdp-nouveau";
     enAttente = false;
     return;
   }
 
-  // Mot de passe OK — chercher ou créer le joueur
-  joueurId  = norm(prenom).replace(/\s+/g, "_");
-  sessionId = CONFIG.sessionId;
+  // Mot de passe confirmé → créer le joueur dans Firebase
+  mdpJoueur = mdpTemp;
+  mdpTemp   = "";
 
-  const joueurRef = ref(db, `joueurs/${sessionId}/${joueurId}`);
-  const snap = await get(joueurRef);
+  await analyse();
 
-  if (snap.exists()) {
-    // Reconnexion — on reprend la progression
-    const data = snap.val();
-    enigmeIdx = data.enigmeIdx  || 0;
-    indiceIdx = data.indiceIdx  || 0;
-    secondes  = data.tempsSecondes || 0;
-    await seq([
-      "Mot de passe accepté.",
-      `Bienvenue de retour, ${prenom}.`,
-      `Reprise à l'énigme ${enigmeIdx + 1}...`,
-    ], "success");
-  } else {
-    // Nouveau joueur
-    enigmeIdx = 0; indiceIdx = 0; secondes = 0;
-    await set(joueurRef, {
+  try {
+    await set(ref(db, `joueurs/${sessionId}/${joueurId}`), {
       prenom,
       joueurId,
-      enigmeIdx: 0,
-      indiceIdx: 0,
+      mdpHash:       btoa(mdpJoueur), // encodage basique
+      enigmeIdx:     0,
+      indiceIdx:     0,
       tempsSecondes: 0,
-      fini: false,
+      fini:          false,
       sessionId,
-      connecteAt: Date.now(),
+      connecteAt:    Date.now(),
     });
+    enigmeIdx = 0;
+    indiceIdx = 0;
+    secondes  = 0;
+
+    ligne("", "info");
     await seq([
-      "Mot de passe accepté.",
-      `Identité enregistrée : ${prenom.toUpperCase()}.`,
-      "Bienvenue, agent.",
+      "Mot de passe enregistré.",
+      `Identité créée : ${prenom.toUpperCase()}`,
+      "Accès au système accordé.",
     ], "success");
+    await pause(400);
+    sep();
+    await lancerJeu();
+  } catch(e) {
+    ligne("⚠ Erreur Firebase : " + e.message, "error");
+    enAttente = false;
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// PHASE 3c — RECONNEXION (joueur existant)
+// ══════════════════════════════════════════════════════
+async function traiterReconnexionMdp(saisie) {
+  enAttente = true;
+  ligne("MOT DE PASSE > " + "•".repeat(saisie.length), "input");
+  await analyse();
+
+  const snap = await get(ref(db, `joueurs/${sessionId}/${joueurId}`));
+  if (!snap.exists()) {
+    ligne("⚠ Joueur introuvable. Rechargez la page.", "error");
+    enAttente = false;
+    return;
   }
 
-  await pause(400); sep();
-  PROMPT_EL.textContent = "ROOT@T7 >";
-  INPUT_EL.type = "text";
-  INPUT_EL.placeholder = "Entrez une commande ou une réponse…";
+  const data = snap.val();
+  // Vérification du mot de passe (comparaison base64)
+  if (btoa(saisie) !== data.mdpHash) {
+    ligne("", "info");
+    await seq(["⚠ MOT DE PASSE INCORRECT.", "Réessayez."], "error");
+    ligne("", "info");
+    setPrompt("MOT DE PASSE >", "password", "Votre mot de passe…");
+    enAttente = false;
+    return;
+  }
 
-  // Écouter les resets en temps réel
-  ecouterReset();
+  // Mot de passe OK → reprendre la progression
+  mdpJoueur = saisie;
+  enigmeIdx = data.enigmeIdx     || 0;
+  indiceIdx = data.indiceIdx     || 0;
+  secondes  = data.tempsSecondes || 0;
 
-  await demarrerJeu();
+  // Charger les notes sauvegardées
+  if (data.notes) chargerNotes(data.notes);
+
+  ligne("", "info");
+  await seq([
+    "Authentification réussie.",
+    `Bon retour, ${prenom.toUpperCase()}.`,
+    `Reprise à l'énigme ${enigmeIdx + 1} — Chrono : ${fmt(secondes)}`,
+  ], "success");
+  await pause(400);
+  sep();
+  await lancerJeu();
 }
 
 // ══════════════════════════════════════════════════════
 // JEU
 // ══════════════════════════════════════════════════════
-async function demarrerJeu() {
-  phase = "jeu"; enAttente = true;
+async function lancerJeu() {
+  phase = "jeu";
+  enAttente = true;
   majProgression();
   majChrono();
   demarrerChrono();
+  ecouterReset();
 
   await seq([
     "",
@@ -332,26 +445,27 @@ async function demarrerJeu() {
   await seq([
     "INSTRUCTIONS :",
     "  → Tapez votre réponse pour résoudre une énigme.",
-    "  → HELP    : demander un indice (+3 min de pénalité)",
+    "  → HELP    : demander un indice  (+3 min)",
     "  → STATUS  : afficher votre progression",
     "",
-    "⚠ Chaque mauvaise réponse ajoute 2 min au chronomètre.",
-    "⚠ Chaque indice ajoute 3 min au chronomètre.",
+    "⚠ Chaque mauvaise réponse ajoute 2 min au chrono.",
+    "⚠ Chaque indice ajoute 3 min au chrono.",
   ], "info");
   sep();
+
+  setPrompt("ROOT@T7 >", "text", "Entrez votre réponse…");
 
   await pause(300);
   if (enigmeIdx >= ENIGMES.length) {
     await afficherVictoire();
   } else {
-    await lancerEnigme();
+    await afficherEnigme();
   }
   enAttente = false;
 }
 
-async function lancerEnigme() {
+async function afficherEnigme() {
   const e = ENIGMES[enigmeIdx];
-  // indiceIdx se réinitialise SEULEMENT pour une nouvelle énigme (pas à la reconnexion)
   ligne("", "info");
   await typing(`[ ${e.titre} ]`, "warning", 20);
   ligne("", "info");
@@ -361,43 +475,19 @@ async function lancerEnigme() {
 }
 
 // ══════════════════════════════════════════════════════
-// SAISIE
+// TRAITEMENT SAISIE EN JEU
 // ══════════════════════════════════════════════════════
-async function traiterSaisie(saisie) {
-  if (enAttente) return;
-  saisie = saisie.trim();
-  if (!saisie) return;
-
-  // Phase login
-  if (phase === "login") {
-    if (saisie.length < 2) {
-      ligne("Prénom trop court.", "error");
-      return;
-    }
-    enAttente = true;
-    ligne(`PRÉNOM > ${saisie}`, "input");
-    await phaseMdp(saisie);
-    return;
-  }
-
-  // Phase mdp
-  if (phase === "mdp") {
-    await verifierConnexion(saisie);
-    return;
-  }
-
-  if (phase !== "jeu") return;
-
+async function traiterSaisieJeu(saisie) {
   enAttente = true;
   ligne(`ROOT@T7 > ${saisie}`, "input");
   const cmd = norm(saisie);
 
   if (cmd === "status") {
     ligne("", "info");
-    ligne(`Joueur        : ${prenom.toUpperCase()}`, "system");
-    ligne(`Énigme        : ${enigmeIdx + 1} / ${ENIGMES.length}`, "system");
-    ligne(`Chronomètre   : ${fmt(secondes)}`, "system");
-    ligne(`Indices       : ${indiceIdx}`, "system");
+    ligne(`Joueur      : ${prenom.toUpperCase()}`, "system");
+    ligne(`Énigme      : ${enigmeIdx + 1} / ${ENIGMES.length}`, "system");
+    ligne(`Chrono      : ${fmt(secondes)}`, "system");
+    ligne(`Indices     : ${indiceIdx} utilisé(s)`, "system");
     ligne("", "info");
     enAttente = false;
     return;
@@ -428,7 +518,6 @@ async function verifierReponse(cmd) {
     indiceIdx = 0;
     majProgression();
 
-    // Sauvegarde Firebase
     await update(ref(db, `joueurs/${sessionId}/${joueurId}`), {
       enigmeIdx,
       indiceIdx,
@@ -439,7 +528,7 @@ async function verifierReponse(cmd) {
       await afficherVictoire();
     } else {
       await pause(400);
-      await lancerEnigme();
+      await afficherEnigme();
     }
   } else {
     ajouterPenalite(2);
@@ -452,7 +541,6 @@ async function verifierReponse(cmd) {
     ligne("", "info");
     await typing("Tapez HELP pour obtenir un indice.", "system");
     ligne("", "info");
-    // Sauvegarde le temps pénalisé
     await update(ref(db, `joueurs/${sessionId}/${joueurId}`), { tempsSecondes: secondes });
   }
 }
@@ -464,20 +552,19 @@ async function donnerIndice() {
   if (indiceIdx >= indices.length) {
     await seq([
       "Aucun indice supplémentaire disponible.",
-      "Analysez les données précédentes.",
+      "Analysez attentivement les données précédentes.",
     ], "warning");
     return;
   }
 
   ajouterPenalite(3);
   ligne("", "info");
-  await typing(`[ INDICE NIVEAU ${indiceIdx + 1} ] — +3 MIN`, "warning", 25);
+  await typing(`[ INDICE NIVEAU ${indiceIdx + 1} ]  ⏱ +3 MIN`, "warning", 25);
   await pause(200);
   await typing(indices[indiceIdx], "info");
   ligne("", "info");
   indiceIdx++;
 
-  // Sauvegarde
   await update(ref(db, `joueurs/${sessionId}/${joueurId}`), {
     indiceIdx,
     tempsSecondes: secondes,
@@ -491,7 +578,6 @@ async function afficherVictoire() {
   stopChrono();
   phase = "fini";
 
-  // Enregistrer dans Firebase
   const tempsFinal = secondes;
   await update(ref(db, `joueurs/${sessionId}/${joueurId}`), {
     fini: true,
@@ -499,7 +585,6 @@ async function afficherVictoire() {
     enigmeIdx,
     finAt: Date.now(),
   });
-  // Ajouter au classement
   await set(ref(db, `classement/${sessionId}/${joueurId}`), {
     prenom,
     tempsSecondes: tempsFinal,
@@ -507,13 +592,29 @@ async function afficherVictoire() {
     finAt: Date.now(),
   });
 
-  // Affichage overlay
-  document.getElementById("final-temps").textContent  = fmt(tempsFinal);
-  document.getElementById("final-indices").textContent = indiceIdx + " indice(s)";
+  document.getElementById("final-temps").textContent   = fmt(tempsFinal);
+  document.getElementById("final-indices").textContent = indiceIdx + " indice(s) utilisé(s)";
   document.getElementById("final-code").textContent    = CONFIG.codeVictoire || "OMEGA-7-LIBRE";
-  document.getElementById("vic-sub-text").innerHTML   =
-    (CONFIG.msgVictoire || "Félicitations, agent !").replace(/\n/g,"<br>");
+  document.getElementById("vic-sub-text").innerHTML    =
+    (CONFIG.msgVictoire || "Félicitations !").replace(/\n/g,"<br>");
   document.getElementById("victory").classList.add("show");
+}
+
+// ══════════════════════════════════════════════════════
+// ROUTEUR PRINCIPAL DES SAISIES
+// ══════════════════════════════════════════════════════
+async function traiterSaisie(saisie) {
+  if (enAttente) return;
+  saisie = saisie.trim();
+  if (!saisie) return;
+
+  switch(phase) {
+    case "saisie-prenom":          await traiterPrenom(saisie);         break;
+    case "saisie-mdp-nouveau":     await traiterNouveauMdp(saisie);     break;
+    case "saisie-mdp-confirm":     await traiterConfirmMdp(saisie);     break;
+    case "saisie-mdp-reconnexion": await traiterReconnexionMdp(saisie); break;
+    case "jeu":                    await traiterSaisieJeu(saisie);       break;
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -524,7 +625,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   INPUT_EL  = document.getElementById("input");
   PROMPT_EL = document.getElementById("prompt");
 
-  // Chrono horloge
+  // Horloge
   setInterval(() => {
     const n = new Date();
     document.getElementById("clock").textContent =
@@ -540,15 +641,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   INPUT_EL.addEventListener("keydown", e => {
     if (e.key === "Enter") { const v = INPUT_EL.value; INPUT_EL.value = ""; traiterSaisie(v); }
   });
-  document.addEventListener("click", () => { if (phase !== "fini") INPUT_EL.focus(); });
+  document.addEventListener("click", () => {
+    if (phase !== "fini" && phase !== "reset") INPUT_EL.focus();
+  });
 
-  // Charger config & lancer
+  // Charger config Firebase puis démarrer
   try {
     await chargerConfig();
     await phaseLogin();
   } catch(err) {
-    ligne("ERREUR : " + err.message, "error");
-    ligne("Vérifiez votre configuration Firebase.", "error");
+    ligne("⚠ ERREUR : " + err.message, "error");
+    ligne("Vérifiez votre connexion et la configuration Firebase.", "error");
   }
 });
 </script>
@@ -568,9 +671,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   --text:       #c8ffd8;
   --border:     #1a3d22;
   --fs-base:    clamp(.78rem, 2.3vw, .92rem);
-  --fs-art:     clamp(.62rem, 1.6vw, 1rem);
+  --fs-art:     clamp(.58rem, 1.5vw, .98rem);
   --fs-logo:    clamp(1.1rem, 3.5vw, 1.8rem);
-  --fs-cd:      clamp(1rem, 3vw, 1.6rem);
+  --fs-cd:      clamp(1rem, 3vw, 1.55rem);
 }
 *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
 input, textarea { font-size: max(16px, 1em); }
@@ -594,11 +697,6 @@ body::after {
 @keyframes flicker    { 0%,95%,100%{opacity:1} 96%{opacity:.93} 97%{opacity:1} 98%{opacity:.96} }
 @keyframes pulse      { 0%,100%{opacity:1} 50%{opacity:.3} }
 @keyframes glow-pulse { from{text-shadow:0 0 20px var(--green),0 0 40px var(--green-glow)} to{text-shadow:0 0 40px var(--green),0 0 80px var(--green-glow)} }
-@keyframes glow-red   { from{text-shadow:0 0 20px rgba(255,51,51,.6)} to{text-shadow:0 0 50px rgba(255,51,51,1)} }
-@keyframes glitch-move {
-  0%{top:10%;width:60%;left:20%;opacity:.8} 25%{top:40%;width:80%;left:0%;opacity:.5}
-  50%{top:70%;width:45%;left:25%;opacity:.9} 75%{top:20%;width:90%;left:5%;opacity:.6} 100%{top:50%;width:65%;left:15%;opacity:.8}
-}
 
 /* HEADER */
 #header {
@@ -613,25 +711,27 @@ body::after {
 #countdown {
   display:flex; align-items:center; gap:6px;
   font-family:'VT323',monospace; font-size:var(--fs-cd);
-  color:var(--green); text-shadow:0 0 10px var(--green-glow); white-space:nowrap; transition:color .4s;
+  color:var(--green); text-shadow:0 0 10px var(--green-glow); white-space:nowrap;
+  transition:color .3s;
 }
 #countdown .cd-label {
-  font-family:'Share Tech Mono',monospace; font-size:clamp(.48rem,1.2vw,.6rem); opacity:.7; display:none;
+  font-family:'Share Tech Mono',monospace; font-size:clamp(.46rem,1.2vw,.6rem); opacity:.7;
+  display:none;
 }
-@media(min-width:420px){ #countdown .cd-label { display:inline; } }
-.header-right { display:flex; align-items:center; gap:10px; }
-.status-row { display:none; gap:12px; font-size:.65rem; color:var(--green-dim); }
-@media(min-width:560px){ .status-row { display:flex; } }
+@media(min-width:400px){ #countdown .cd-label { display:inline; } }
+#countdown.penalite { color:var(--red); animation:pulse .3s 3; }
+.header-right { display:flex; align-items:center; gap:8px; }
+.status-row { display:none; gap:10px; font-size:.63rem; color:var(--green-dim); }
+@media(min-width:520px){ .status-row { display:flex; } }
 .status-row span { display:flex; align-items:center; gap:4px; }
 .dot { width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 5px var(--green); animation:pulse 1.6s infinite; }
 
 /* PROGRESS */
 #progress-bar {
-  display:flex; gap:5px; padding:5px 12px;
-  background:var(--bg-panel); border-bottom:1px solid var(--border);
-  flex-shrink:0; align-items:center; min-height:28px; flex-wrap:wrap;
+  display:flex; gap:5px; padding:5px 12px; background:var(--bg-panel);
+  border-bottom:1px solid var(--border); flex-shrink:0; align-items:center; min-height:26px; flex-wrap:wrap;
 }
-#progress-bar .label { font-size:.62rem; color:var(--green-dim); margin-right:6px; letter-spacing:1px; }
+#progress-bar .label { font-size:.6rem; color:var(--green-dim); margin-right:6px; letter-spacing:1px; }
 .step-dot { width:10px; height:10px; border-radius:50%; border:1px solid var(--green-dim); transition:all .4s; }
 .step-dot.done    { background:var(--green);  box-shadow:0 0 6px var(--green);  border-color:var(--green);  }
 .step-dot.current { background:var(--yellow); box-shadow:0 0 6px var(--yellow); border-color:var(--yellow); animation:pulse 1s infinite; }
@@ -653,15 +753,15 @@ body::after {
 .line.warning { color:var(--yellow); }
 .line.info    { color:var(--text); }
 .line.art     { color:var(--green); font-family:'VT323',monospace; font-size:var(--fs-art); letter-spacing:clamp(0px,.2vw,1px); }
-.line.sep     { color:var(--border); font-size:.72rem; }
+.line.sep     { color:var(--border); font-size:.7rem; }
 
 /* INPUT */
 #input-area {
   display:flex; align-items:center; padding:8px 12px;
-  padding-bottom:max(10px, env(safe-area-inset-bottom,10px));
+  padding-bottom:max(10px, env(safe-area-inset-bottom, 10px));
   border-top:1px solid var(--border); background:var(--bg-panel); gap:8px; flex-shrink:0;
 }
-#prompt { color:var(--green); font-size:clamp(.78rem,2.2vw,1rem); white-space:nowrap; text-shadow:0 0 6px var(--green-glow); flex-shrink:0; }
+#prompt { color:var(--green); font-size:clamp(.76rem,2.2vw,1rem); white-space:nowrap; text-shadow:0 0 6px var(--green-glow); flex-shrink:0; }
 #input {
   flex:1; background:transparent; border:none; outline:none;
   color:var(--cyan); font-family:'Share Tech Mono',monospace;
@@ -671,12 +771,12 @@ body::after {
 #send-btn {
   background:transparent; border:1px solid var(--green-dim); color:var(--green-dim);
   font-family:'Share Tech Mono',monospace; font-size:clamp(.6rem,1.8vw,.75rem);
-  padding:6px 12px; cursor:pointer; letter-spacing:1px; transition:all .2s;
-  min-height:40px; min-width:44px; flex-shrink:0;
+  padding:7px 14px; cursor:pointer; letter-spacing:1px; transition:all .2s;
+  min-height:42px; min-width:48px; flex-shrink:0;
 }
-#send-btn:hover,#send-btn:active { border-color:var(--green); color:var(--green); }
+#send-btn:hover,#send-btn:active { border-color:var(--green); color:var(--green); box-shadow:0 0 8px var(--green-glow); }
 
-/* VICTORY OVERLAY */
+/* VICTORY */
 #victory {
   display:none; position:fixed; inset:0; background:rgba(0,5,2,.95);
   z-index:1000; align-items:center; justify-content:center;
@@ -684,11 +784,155 @@ body::after {
   text-align:center; padding:clamp(20px,5vw,40px); overflow-y:auto;
 }
 #victory.show { display:flex; }
-.vic-title  { font-family:'VT323',monospace; font-size:clamp(2.2rem,9vw,5rem); color:var(--green); animation:glow-pulse 1s ease-in-out infinite alternate; }
-.vic-sub    { font-size:clamp(.78rem,2.3vw,1rem); color:var(--text); max-width:min(480px,90vw); line-height:1.7; }
-.vic-temps  { font-family:'VT323',monospace; font-size:clamp(1.4rem,5.5vw,2.6rem); color:var(--yellow); text-shadow:0 0 16px var(--yellow); letter-spacing:3px; }
-.vic-code   { font-family:'VT323',monospace; font-size:clamp(1.3rem,5vw,2.4rem); color:var(--cyan); text-shadow:0 0 16px var(--cyan); letter-spacing:clamp(2px,1vw,6px); word-break:break-all; }
-.vic-meta   { font-size:clamp(.65rem,1.8vw,.8rem); color:var(--green-dim); letter-spacing:1px; }
+.vic-title  { font-family:'VT323',monospace; font-size:clamp(2rem,8vw,4.5rem); color:var(--green); animation:glow-pulse 1s ease-in-out infinite alternate; }
+.vic-prenom { font-family:'VT323',monospace; font-size:clamp(1.4rem,5vw,2.5rem); color:var(--cyan); letter-spacing:3px; }
+.vic-sub    { font-size:clamp(.76rem,2.2vw,.95rem); color:var(--text); max-width:min(460px,90vw); line-height:1.7; }
+.vic-temps  { font-family:'VT323',monospace; font-size:clamp(1.6rem,6vw,3rem); color:var(--yellow); text-shadow:0 0 16px var(--yellow); letter-spacing:3px; }
+.vic-code   { font-family:'VT323',monospace; font-size:clamp(1.2rem,5vw,2.2rem); color:var(--cyan); text-shadow:0 0 16px var(--cyan); letter-spacing:clamp(2px,1vw,6px); word-break:break-all; }
+.vic-meta   { font-size:clamp(.62rem,1.8vw,.78rem); color:var(--green-dim); letter-spacing:1px; }
+
+/* BANNIÈRE INSTALL PWA (affichée une fois sur iOS) */
+#pwa-banner {
+  display:none; position:fixed; bottom:0; left:0; right:0;
+  background:#050f07; border-top:1px solid var(--green-dim);
+  padding:10px 16px; z-index:500; font-size:.72rem; color:var(--text);
+  align-items:center; gap:10px; text-align:center; flex-wrap:wrap; justify-content:center;
+}
+#pwa-banner.show { display:flex; }
+#pwa-banner button {
+  background:transparent; border:1px solid var(--green); color:var(--green);
+  font-family:'Share Tech Mono',monospace; font-size:.65rem; padding:5px 12px;
+  cursor:pointer; white-space:nowrap; min-height:34px;
+}
+
+/* ══ BOUTON NOTES (header) ══ */
+#notes-btn {
+  background: transparent;
+  border: 1px solid var(--green-dim);
+  color: var(--green-dim);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: clamp(.55rem, 1.6vw, .68rem);
+  padding: 5px 10px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all .25s;
+  white-space: nowrap;
+  min-height: 34px;
+  min-width: 44px;
+}
+#notes-btn:hover, #notes-btn:active {
+  border-color: var(--yellow);
+  color: var(--yellow);
+  box-shadow: 0 0 8px rgba(255,204,0,.3);
+}
+#notes-btn.has-notes {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+/* ══ PANNEAU NOTES ══ */
+#notes-panel {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  flex-direction: column;
+  background: rgba(2, 8, 3, 0.97);
+}
+#notes-panel.open { display: flex; }
+
+#notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  gap: 10px;
+}
+#notes-header .notes-title {
+  font-family: 'VT323', monospace;
+  font-size: 1.4rem;
+  color: var(--yellow);
+  letter-spacing: 3px;
+}
+#notes-header .notes-hint {
+  font-size: .6rem;
+  color: var(--green-dim);
+  letter-spacing: 1px;
+}
+#notes-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--green-dim);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: .7rem;
+  padding: 6px 14px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all .2s;
+  min-height: 36px;
+}
+#notes-close:hover, #notes-close:active {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+#notes-textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: clamp(.82rem, 2.3vw, .92rem);
+  line-height: 1.7;
+  padding: 16px;
+  resize: none;
+  caret-color: var(--green);
+  -webkit-overflow-scrolling: touch;
+}
+#notes-textarea::placeholder {
+  color: var(--green-dim);
+  opacity: .4;
+}
+
+#notes-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom, 10px));
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  gap: 10px;
+}
+#notes-status {
+  font-size: .6rem;
+  color: var(--green-dim);
+  letter-spacing: 1px;
+  min-width: 80px;
+}
+#notes-status.saving { color: var(--yellow); }
+#notes-status.saved  { color: var(--green);  }
+#notes-clear {
+  background: transparent;
+  border: 1px solid #ff333344;
+  color: #ff333388;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: .62rem;
+  padding: 5px 12px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all .2s;
+  min-height: 32px;
+}
+#notes-clear:hover, #notes-clear:active {
+  border-color: var(--red);
+  color: var(--red);
+}
 </style>
 </head>
 <body>
@@ -702,34 +946,137 @@ body::after {
   </div>
   <div class="header-right">
     <div class="status-row">
-      <span><span class="dot"></span>SYSTÈME ACTIF</span>
+      <span><span class="dot"></span>EN LIGNE</span>
       <span id="clock"></span>
     </div>
+    <button id="notes-btn" onclick="ouvrirNotes()" title="Mes notes">📝 NOTES</button>
   </div>
 </div>
 
-<!-- PROGRESS -->
+<!-- PROGRESSION -->
 <div id="progress-bar"><span class="label">PROGRESSION :</span></div>
 
-<!-- OUTPUT -->
+<!-- TERMINAL -->
 <div id="output"></div>
 
-<!-- INPUT -->
+<!-- SAISIE -->
 <div id="input-area">
-  <span id="prompt">ROOT@T7 &gt;</span>
+  <span id="prompt">PRÉNOM &gt;</span>
   <input id="input" type="text" autocomplete="off" spellcheck="false"
-         placeholder="Entrez votre prénom…">
+         placeholder="Votre prénom…" enterkeyhint="send">
   <button id="send-btn">OK</button>
 </div>
 
-<!-- VICTORY OVERLAY -->
+<!-- VICTOIRE -->
 <div id="victory">
   <div class="vic-title">MISSION ACCOMPLIE</div>
+  <div class="vic-prenom" id="final-prenom"></div>
   <div class="vic-sub" id="vic-sub-text"></div>
   <div class="vic-temps" id="final-temps"></div>
   <div class="vic-meta" id="final-indices"></div>
   <div class="vic-code" id="final-code"></div>
 </div>
 
+<!-- PANNEAU NOTES -->
+<div id="notes-panel">
+  <div id="notes-header">
+    <div>
+      <div class="notes-title">📝 MES NOTES</div>
+      <div class="notes-hint">Sauvegardé automatiquement</div>
+    </div>
+    <button id="notes-close" onclick="fermerNotes()">✕ FERMER</button>
+  </div>
+  <textarea id="notes-textarea"
+    placeholder="Écrivez vos notes ici...&#10;Indices, idées, déductions...&#10;&#10;Tout sera conservé si vous vous déconnectez."
+    oninput="onNotesInput()"></textarea>
+  <div id="notes-footer">
+    <span id="notes-status">—</span>
+    <button id="notes-clear" onclick="effacerNotes()">🗑 EFFACER</button>
+  </div>
+</div>
+
+<!-- BANNIÈRE INSTALLATION PWA (iOS Safari) -->
+<div id="pwa-banner">
+  <span>📲 Installez l'app : appuyez sur <strong>Partager</strong> puis <strong>Sur l'écran d'accueil</strong></span>
+  <button onclick="document.getElementById('pwa-banner').classList.remove('show')">✕</button>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════
+// NOTES
+// ══════════════════════════════════════════════════════
+let notesTimer = null;
+
+function ouvrirNotes() {
+  document.getElementById("notes-panel").classList.add("open");
+  document.getElementById("notes-textarea").focus();
+}
+
+function fermerNotes() {
+  document.getElementById("notes-panel").classList.remove("open");
+  // Remettre le focus sur l'input principal
+  setTimeout(() => {
+    if (phase !== "fini" && phase !== "reset") INPUT_EL.focus();
+  }, 100);
+}
+
+function onNotesInput() {
+  // Indicateur "en cours de saisie"
+  const status = document.getElementById("notes-status");
+  status.textContent = "…";
+  status.className = "saving";
+
+  // Marquer le bouton si des notes existent
+  const hasContent = document.getElementById("notes-textarea").value.trim().length > 0;
+  document.getElementById("notes-btn").classList.toggle("has-notes", hasContent);
+
+  // Sauvegarde différée (2s après la dernière frappe)
+  clearTimeout(notesTimer);
+  notesTimer = setTimeout(() => sauvegarderNotes(), 2000);
+}
+
+async function sauvegarderNotes() {
+  if (!joueurId || !sessionId) return;
+  const texte = document.getElementById("notes-textarea").value;
+  const status = document.getElementById("notes-status");
+  try {
+    await update(ref(db, `joueurs/${sessionId}/${joueurId}`), { notes: texte });
+    status.textContent = "✓ SAUVEGARDÉ";
+    status.className = "saved";
+    setTimeout(() => { status.textContent = "—"; status.className = ""; }, 2500);
+  } catch(e) {
+    status.textContent = "⚠ ERREUR";
+    status.className = "";
+  }
+}
+
+async function effacerNotes() {
+  if (!confirm("Effacer toutes vos notes ?")) return;
+  document.getElementById("notes-textarea").value = "";
+  document.getElementById("notes-btn").classList.remove("has-notes");
+  await sauvegarderNotes();
+}
+
+function chargerNotes(texte) {
+  if (!texte) return;
+  document.getElementById("notes-textarea").value = texte;
+  document.getElementById("notes-btn").classList.add("has-notes");
+}
+
+// Exposer les fonctions au HTML
+window.ouvrirNotes  = ouvrirNotes;
+window.fermerNotes  = fermerNotes;
+window.onNotesInput = onNotesInput;
+window.effacerNotes = effacerNotes;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = window.navigator.standalone === true;
+if (isIOS && !isStandalone) {
+  setTimeout(() => document.getElementById("pwa-banner").classList.add("show"), 3000);
+}
+// Mettre à jour le prénom dans l'overlay victoire
+document.addEventListener("victoire-joueur", e => {
+  document.getElementById("final-prenom").textContent = e.detail?.toUpperCase() || "";
+});
+</script>
 </body>
 </html>
