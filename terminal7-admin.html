@@ -65,6 +65,7 @@ async function chargerAdmin() {
     sessionId = c.sessionId || genSessionId();
     document.getElementById("cfg-mdp").value          = c.motDePasse || "";
     document.getElementById("cfg-code").value         = c.codeVictoire || "";
+    document.getElementById("cfg-code-final").value   = c.codeFinal || "94";
     document.getElementById("cfg-msg-victoire").value = c.msgVictoire || "";
     document.getElementById("cfg-msg-gameover").value = c.msgGameOver || "";
   }
@@ -209,9 +210,10 @@ function renderClassement(data) {
 // SAUVEGARDER CONFIG + ÉNIGMES
 // ══════════════════════════════════════════════════════
 async function sauvegarder() {
-  const mdp    = document.getElementById("cfg-mdp").value.trim();
-  const code   = document.getElementById("cfg-code").value.trim();
-  const msgVic = document.getElementById("cfg-msg-victoire").value.trim();
+  const mdp       = document.getElementById("cfg-mdp").value.trim();
+  const code      = document.getElementById("cfg-code").value.trim();
+  const codeFinal = document.getElementById("cfg-code-final").value.trim();
+  const msgVic    = document.getElementById("cfg-msg-victoire").value.trim();
 
   if (!mdp) { afficherStatut("⚠ Mot de passe joueur manquant", "err"); return; }
 
@@ -243,9 +245,10 @@ async function sauvegarder() {
 
   try {
     await set(ref(db, "config"), {
-      motDePasse: mdp,
+      motDePasse:   mdp,
       codeVictoire: code || "OMEGA-7-LIBRE",
-      msgVictoire: msgVic || "Félicitations !",
+      codeFinal:    codeFinal || "94",
+      msgVictoire:  msgVic || "Félicitations !",
       sessionId,
     });
     await set(ref(db, "enigmes"), enigmes);
@@ -739,6 +742,11 @@ tr:hover td { background:rgba(0,204,255,.04); }
         <label>Code de victoire</label>
         <input type="text" id="cfg-code" placeholder="ex : OMEGA-7-LIBRE">
         <span class="field-hint">Affiché à l'écran final quand le joueur termine</span>
+      </div>
+      <div class="field-group">
+        <label>Code final (arrête le chrono)</label>
+        <input type="text" id="cfg-code-final" placeholder="ex : 94">
+        <span class="field-hint">Code que vous donnez verbalement au joueur à la fin. Arrête le chronomètre.</span>
       </div>
       <div class="field-group" style="grid-column:1/-1">
         <label>Message écran victoire</label>

@@ -65,7 +65,8 @@ let enigmeIdx     = 0;
 let indiceIdx     = 0;
 let enAttente     = false;
 // phases : "saisie-prenom" | "saisie-mdp-nouveau" | "saisie-mdp-confirm" |
-//          "saisie-mdp-reconnexion" | "saisie-code-session" | "jeu" | "fini" | "reset"
+//          "saisie-mdp-reconnexion" | "saisie-code-session" |
+//          "saisie-code-final" | "jeu" | "fini" | "reset"
 let phase         = "saisie-prenom";
 let timerInterval = null;
 let secondes      = 0;
@@ -685,7 +686,9 @@ async function verifierReponse(cmd) {
     });
 
     if (enigmeIdx >= ENIGMES.length) {
-      await afficherVictoire();
+      // Toutes les énigmes résolues → demander le code final avant la victoire
+      await pause(400);
+      await phaseCodeFinal();
     } else {
       await pause(400);
       await afficherEnigme();
@@ -732,6 +735,58 @@ async function donnerIndice() {
 }
 
 // ══════════════════════════════════════════════════════
+// PHASE CODE FINAL — arrête le chrono à la saisie
+// ══════════════════════════════════════════════════════
+async function phaseCodeFinal() {
+  phase = "saisie-code-final";
+  enAttente = true;
+
+  sep();
+  await typing("DÉVERROUILLAGE SYSTÈME — NIVEAU ALPHA", "warning", 22);
+  sep();
+  await pause(200);
+  await seq([
+    "Toutes les énigmes ont été résolues.",
+    "Un dernier code vous a été communiqué par le maître du jeu.",
+    "Entrez ce code pour arrêter le chronomètre.",
+    "",
+  ], "info");
+
+  setPrompt("CODE FINAL >", "password", "Entrez le code final…");
+  enAttente = false;
+}
+
+async function traiterCodeFinal(saisie) {
+  enAttente = true;
+  ligne("CODE FINAL > " + "•".repeat(saisie.length), "input");
+  await analyse();
+
+  const codeFinalAttendu = CONFIG.codeFinal || "94";
+
+  if (norm(saisie) !== norm(codeFinalAttendu)) {
+    ligne("", "info");
+    await seq([
+      "⚠ CODE FINAL INCORRECT.",
+      "Accès refusé. Réessayez.",
+    ], "error");
+    ligne("", "info");
+    setPrompt("CODE FINAL >", "password", "Entrez le code final…");
+    enAttente = false;
+    return;
+  }
+
+  // Code correct → arrêt immédiat du chrono et victoire
+  ligne("", "info");
+  await seq([
+    "✓ CODE FINAL ACCEPTÉ.",
+    "Chronomètre arrêté.",
+    "Mission accomplie.",
+  ], "success");
+  await pause(400);
+  await afficherVictoire();
+}
+
+// ══════════════════════════════════════════════════════
 // VICTOIRE
 // ══════════════════════════════════════════════════════
 async function afficherVictoire() {
@@ -774,6 +829,7 @@ async function traiterSaisie(saisie) {
     case "saisie-mdp-confirm":     await traiterConfirmMdp(saisie);     break;
     case "saisie-mdp-reconnexion": await traiterReconnexionMdp(saisie); break;
     case "saisie-code-session":    await traiterCodeSession(saisie);    break;
+    case "saisie-code-final":      await traiterCodeFinal(saisie);      break;
     case "jeu":                    await traiterSaisieJeu(saisie);       break;
   }
 }
@@ -802,7 +858,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   INPUT_EL.addEventListener("keydown", e => {
     if (e.key === "Enter") { const v = INPUT_EL.value; INPUT_EL.value = ""; traiterSaisie(v); }
   });
-  document.addEventListener("click", () => {
+  document.addEventListener("click", (e) => {
+    // Ne pas voler le focus si le panneau notes est ouvert
+    if (document.getElementById("notes-panel").classList.contains("open")) return;
     if (phase !== "fini" && phase !== "reset") INPUT_EL.focus();
   });
 
@@ -1004,9 +1062,9 @@ body::after {
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 800;
+  z-index: 1500;   /* au-dessus de tout sauf victory/gameover */
   flex-direction: column;
-  background: rgba(2, 8, 3, 0.97);
+  background: #020803;
 }
 #notes-panel.open { display: flex; }
 
@@ -1050,17 +1108,22 @@ body::after {
 
 #notes-textarea {
   flex: 1;
-  background: transparent;
+  background: #020803;
   border: none;
   outline: none;
   color: var(--text);
   font-family: 'Share Tech Mono', monospace;
-  font-size: clamp(.82rem, 2.3vw, .92rem);
+  font-size: 16px;   /* fixe à 16px — empêche le zoom iOS et garantit la saisie */
   line-height: 1.7;
   padding: 16px;
   resize: none;
   caret-color: var(--green);
   -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+  /* Désactive explicitement tout comportement tactile hérité */
+  touch-action: auto;
+  -webkit-user-select: text;
+  user-select: text;
 }
 #notes-textarea::placeholder {
   color: var(--green-dim);
