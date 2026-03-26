@@ -1061,12 +1061,22 @@ body::after {
 #notes-panel {
   display: none;
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 1500;   /* au-dessus de tout sauf victory/gameover */
   flex-direction: column;
   background: #020803;
+  /* Sur mobile, se repositionne quand le clavier s'ouvre */
+  height: 100%;
+  height: -webkit-fill-available;
 }
 #notes-panel.open { display: flex; }
+/* Quand le clavier est ouvert sur mobile, le panel se recalcule */
+#notes-panel.open #notes-textarea {
+  min-height: 120px;
+}
 
 #notes-header {
   display: flex;
@@ -1108,6 +1118,7 @@ body::after {
 
 #notes-textarea {
   flex: 1;
+  min-height: 0;     /* permet au flex de réduire sans déborder */
   background: #020803;
   border: none;
   outline: none;
@@ -1121,9 +1132,11 @@ body::after {
   -webkit-overflow-scrolling: touch;
   overflow-y: auto;
   /* Désactive explicitement tout comportement tactile hérité */
-  touch-action: auto;
+  touch-action: manipulation;
   -webkit-user-select: text;
   user-select: text;
+  /* Empêche le scroll de la page derrière sur iOS */
+  overscroll-behavior: contain;
 }
 #notes-textarea::placeholder {
   color: var(--green-dim);
@@ -1240,12 +1253,24 @@ body::after {
 let notesTimer = null;
 
 function ouvrirNotes() {
-  document.getElementById("notes-panel").classList.add("open");
-  document.getElementById("notes-textarea").focus();
+  const panel = document.getElementById("notes-panel");
+  const ta = document.getElementById("notes-textarea");
+  panel.classList.add("open");
+
+  // Sur mobile, éviter que le focus déclenche un scroll de page
+  // en positionnant le panel avant l'ouverture du clavier
+  setTimeout(() => {
+    ta.focus();
+    // Place le curseur à la fin du texte existant
+    if (ta.value.length > 0) {
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  }, 50);
 }
 
 function fermerNotes() {
   document.getElementById("notes-panel").classList.remove("open");
+  resetNotesPanelSize();
   // Remettre le focus sur l'input principal
   setTimeout(() => {
     if (phase !== "fini" && phase !== "reset") INPUT_EL.focus();
@@ -1300,6 +1325,31 @@ window.ouvrirNotes  = ouvrirNotes;
 window.fermerNotes  = fermerNotes;
 window.onNotesInput = onNotesInput;
 window.effacerNotes = effacerNotes;
+// ══ GESTION DU CLAVIER VIRTUEL MOBILE ══
+// Sur iOS/Android, quand le clavier s'ouvre, il réduit la fenêtre.
+// On repositionne le panneau notes en temps réel via visualViewport.
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => {
+    const panel = document.getElementById("notes-panel");
+    if (!panel.classList.contains("open")) return;
+    // Ajuste la hauteur du panel à la portion visible de l'écran
+    const vvHeight = window.visualViewport.height;
+    const vvOffsetTop = window.visualViewport.offsetTop;
+    panel.style.top    = vvOffsetTop + "px";
+    panel.style.height = vvHeight + "px";
+  });
+  window.visualViewport.addEventListener('scroll', () => {
+    const panel = document.getElementById("notes-panel");
+    if (!panel.classList.contains("open")) return;
+    panel.style.top = window.visualViewport.offsetTop + "px";
+  });
+}
+function resetNotesPanelSize() {
+  const panel = document.getElementById("notes-panel");
+  panel.style.top    = "";
+  panel.style.height = "";
+}
+
 const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
 const isStandalone = window.navigator.standalone === true;
 if (isIOS && !isStandalone) {
