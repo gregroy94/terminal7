@@ -28,9 +28,9 @@ const db  = getDatabase(app);
 // ══════════════════════════════════════════════════════
 let connecte    = false;
 let sessionId   = null;
-let liveTimers  = {};   // timers locaux pour afficher chrono en direct
+let liveTimers  = {};
 
-const MDP_ADMIN = "admin"; // mot de passe admin local (modifiable ici)
+const MDP_ADMIN = "admin";
 
 // ══════════════════════════════════════════════════════
 // LOGIN ADMIN
@@ -58,27 +58,32 @@ document.addEventListener("DOMContentLoaded", () => {
 // CHARGEMENT INITIAL
 // ══════════════════════════════════════════════════════
 async function chargerAdmin() {
-  // Config
   const snap = await get(ref(db, "config"));
   if (snap.exists()) {
     const c = snap.val();
     sessionId = c.sessionId || genSessionId();
-    document.getElementById("cfg-mdp").value          = c.motDePasse || "";
-    document.getElementById("cfg-code").value         = c.codeVictoire || "";
-    document.getElementById("cfg-code-final").value   = c.codeFinal || "94";
-    document.getElementById("cfg-msg-victoire").value = c.msgVictoire || "";
-    document.getElementById("cfg-msg-gameover").value = c.msgGameOver || "";
+    document.getElementById("cfg-mdp").value               = c.motDePasse || "";
+    document.getElementById("cfg-code").value              = c.codeVictoire || "";
+    document.getElementById("cfg-code-final").value        = c.codeFinal || "94";
+    document.getElementById("cfg-msg-victoire").value      = c.msgVictoire || "";
+    document.getElementById("cfg-msg-gameover").value      = c.msgGameOver || "";
+    document.getElementById("cfg-question-p2").value       = c.questionP2 || "";
+    document.getElementById("cfg-reponse-p2").value        = c.reponseP2 || "";
+    document.getElementById("cfg-msg-question-p2").value   = c.msgQuestionP2 || "Entrez le code pour accéder à la phase finale.";
+  } else {
+    sessionId = genSessionId();
   }
 
-  // Énigmes
-  const snapE = await get(ref(db, "enigmes"));
-  if (snapE.exists()) {
-    const raw = snapE.val();
-    const enigmes = Array.isArray(raw) ? raw : Object.values(raw);
-    renderEnigmes(enigmes);
+  // Charger les 3 parties d'énigmes
+  for (let partie = 1; partie <= 3; partie++) {
+    const snapE = await get(ref(db, `enigmes_p${partie}`));
+    if (snapE.exists()) {
+      const raw = snapE.val();
+      const enigmes = Array.isArray(raw) ? raw : Object.values(raw);
+      renderEnigmes(enigmes, partie);
+    }
   }
 
-  // Écoute temps réel joueurs
   ecouterJoueurs();
   ecouterClassement();
 }
@@ -110,14 +115,10 @@ function fmt(s) {
          String(s%60).padStart(2,"0");
 }
 
-// Chronomètres locaux pour les joueurs actifs
 function demarrerLiveTimer(id, data) {
   if (liveTimers[id]) clearInterval(liveTimers[id]);
-
-  // Calcul du temps réel basé sur chronoStartedAt + penalites
-  const startedAt  = data.chronoStartedAt || null;
-  const penalites  = data.chronoPenalites || 0;
-
+  const startedAt = data.chronoStartedAt || null;
+  const penalites = data.chronoPenalites || 0;
   liveTimers[id] = setInterval(() => {
     const el = document.getElementById("timer-" + id);
     if (el) {
@@ -138,45 +139,47 @@ function stopLiveTimer(id) {
   if (liveTimers[id]) { clearInterval(liveTimers[id]); delete liveTimers[id]; }
 }
 
+function phaseLabel(j) {
+  const p = j.partie || 1;
+  if (j.fini) return '<span class="badge-ok">✓ FINI</span>';
+  if (p === 1) return '<span class="badge-p1">PARTIE 1</span>';
+  if (p === 2) return '<span class="badge-p2">PARTIE 2</span>';
+  if (p === 3) return '<span class="badge-p3">PARTIE 3</span>';
+  return '<span class="badge-en-cours">EN COURS</span>';
+}
+
 function renderJoueurs(data) {
   const tbody = document.getElementById("joueurs-tbody");
   tbody.innerHTML = "";
-
-  // Arrêter tous les timers existants
   Object.keys(liveTimers).forEach(id => stopLiveTimer(id));
 
   const joueurs = Object.values(data);
   if (joueurs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">Aucun joueur connecté</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">Aucun joueur connecté</td></tr>';
     return;
   }
 
-  // Récupérer le nombre total d'énigmes
-  get(ref(db, "enigmes")).then(snapE => {
-    const raw   = snapE.exists() ? snapE.val() : [];
-    const total = Array.isArray(raw) ? raw.length : Object.keys(raw).length;
+  joueurs.forEach(j => {
+    const tr = document.createElement("tr");
+    const partie  = j.partie || 1;
+    const enigIdx = j.enigmeIdx || 0;
+    const solvedInPart = j.enigmesSolveesPartie ? Object.keys(j.enigmesSolveesPartie).length : enigIdx;
+    const timerId = "timer-" + j.joueurId;
 
-    joueurs.forEach(j => {
-      const tr = document.createElement("tr");
-      const etape = `${(j.enigmeIdx||0)+1} / ${total}`;
-      const fini  = j.fini ? '<span class="badge-ok">✓ FINI</span>' : '<span class="badge-en-cours">EN COURS</span>';
-      const timerId = "timer-" + j.joueurId;
+    tr.innerHTML = `
+      <td class="td-prenom">${(j.prenom||"?").toUpperCase()}</td>
+      <td class="td-mdp">${j.mdpClair || "—"}</td>
+      <td>${phaseLabel(j)}</td>
+      <td>P${partie} — ${solvedInPart} résolue(s)</td>
+      <td id="${timerId}">${fmt(j.tempsSecondes||0)}</td>
+      <td>${j.indiceIdx||0}</td>
+      <td>${j.fini ? fmt(j.tempsSecondes||0) : "—"}</td>
+    `;
+    tbody.appendChild(tr);
 
-      tr.innerHTML = `
-        <td class="td-prenom">${(j.prenom||"?").toUpperCase()}</td>
-        <td class="td-mdp">${j.mdpClair || "—"}</td>
-        <td>${fini}</td>
-        <td>${etape}</td>
-        <td id="${timerId}">${fmt(j.tempsSecondes||0)}</td>
-        <td>${j.indiceIdx||0}</td>
-      `;
-      tbody.appendChild(tr);
-
-      // Démarrer le timer live si le joueur n'a pas fini
-      if (!j.fini) {
-        demarrerLiveTimer(j.joueurId, j);
-      }
-    });
+    if (!j.fini) {
+      demarrerLiveTimer(j.joueurId, j);
+    }
   });
 }
 
@@ -186,14 +189,11 @@ function renderJoueurs(data) {
 function renderClassement(data) {
   const tbody = document.getElementById("classement-tbody");
   tbody.innerHTML = "";
-
   const scores = Object.values(data).sort((a,b) => a.tempsSecondes - b.tempsSecondes);
-
   if (scores.length === 0) {
     tbody.innerHTML = '<tr><td colspan="4" class="empty-cell">Aucun joueur n\'a terminé</td></tr>';
     return;
   }
-
   scores.forEach((s, i) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -207,52 +207,71 @@ function renderClassement(data) {
 }
 
 // ══════════════════════════════════════════════════════
-// SAUVEGARDER CONFIG + ÉNIGMES
+// SAUVEGARDER CONFIG + ÉNIGMES 3 PARTIES
 // ══════════════════════════════════════════════════════
 async function sauvegarder() {
-  const mdp       = document.getElementById("cfg-mdp").value.trim();
-  const code      = document.getElementById("cfg-code").value.trim();
-  const codeFinal = document.getElementById("cfg-code-final").value.trim();
-  const msgVic    = document.getElementById("cfg-msg-victoire").value.trim();
+  const mdp           = document.getElementById("cfg-mdp").value.trim();
+  const code          = document.getElementById("cfg-code").value.trim();
+  const codeFinal     = document.getElementById("cfg-code-final").value.trim();
+  const msgVic        = document.getElementById("cfg-msg-victoire").value.trim();
+  const msgGameOver   = document.getElementById("cfg-msg-gameover").value.trim();
+  const questionP2    = document.getElementById("cfg-question-p2").value.trim();
+  const reponseP2     = document.getElementById("cfg-reponse-p2").value.trim();
+  const msgQuestionP2 = document.getElementById("cfg-msg-question-p2").value.trim();
 
   if (!mdp) { afficherStatut("⚠ Mot de passe joueur manquant", "err"); return; }
+  if (!questionP2) { afficherStatut("⚠ La question de transition (Partie 2 → 3) est vide", "err"); return; }
+  if (!reponseP2) { afficherStatut("⚠ La réponse de transition (Partie 2 → 3) est vide", "err"); return; }
 
-  // Lire toutes les cartes
-  const cards = document.querySelectorAll(".enigme-card");
-  const enigmes = [];
   let erreur = false;
+  const enigmesParParties = [];
 
-  cards.forEach(card => {
-    const titre   = card.querySelector(".f-titre").value.trim();
-    const intro   = card.querySelector(".f-intro").value.trim();
-    const indice1 = card.querySelector(".f-indice1").value.trim();
-    const indice2 = card.querySelector(".f-indice2").value.trim();
-    const indice3 = card.querySelector(".f-indice3").value.trim();
-    const echec   = card.querySelector(".f-echec").value.trim();
-    const victoire= card.querySelector(".f-victoire").value.trim();
-    const repInputs = card.querySelectorAll(".f-reponses .rep-tag input");
-    const reponses = [];
-    repInputs.forEach(inp => { const v = inp.value.trim(); if (v) reponses.push(norm(v)); });
-
-    if (reponses.length === 0) {
-      afficherStatut(`⚠ L'énigme "${titre}" n'a aucune réponse`, "err");
-      erreur = true; return;
+  for (let partie = 1; partie <= 3; partie++) {
+    const cards = document.querySelectorAll(`#enigmes-container-p${partie} .enigme-card`);
+    const enigmes = [];
+    cards.forEach(card => {
+      const titre    = card.querySelector(".f-titre").value.trim();
+      const intro    = card.querySelector(".f-intro").value.trim();
+      const indice1  = card.querySelector(".f-indice1").value.trim();
+      const indice2  = card.querySelector(".f-indice2").value.trim();
+      const indice3  = card.querySelector(".f-indice3").value.trim();
+      const echec    = card.querySelector(".f-echec").value.trim();
+      const victoire = card.querySelector(".f-victoire").value.trim();
+      const repInputs = card.querySelectorAll(".f-reponses .rep-tag input");
+      const reponses  = [];
+      repInputs.forEach(inp => { const v = inp.value.trim(); if (v) reponses.push(norm(v)); });
+      if (reponses.length === 0) {
+        afficherStatut(`⚠ Partie ${partie} — L'énigme "${titre}" n'a aucune réponse`, "err");
+        erreur = true; return;
+      }
+      enigmes.push({ titre, intro, indice1, indice2, indice3, echec, victoire, reponses });
+    });
+    if (erreur) return;
+    if (enigmes.length === 0) {
+      afficherStatut(`⚠ La partie ${partie} n'a aucune énigme`, "err");
+      return;
     }
-    enigmes.push({ titre, intro, indice1, indice2, indice3, echec, victoire, reponses });
-  });
+    enigmesParParties.push(enigmes);
+  }
 
-  if (erreur || enigmes.length === 0) return;
+  if (erreur) return;
 
   try {
     await set(ref(db, "config"), {
-      motDePasse:   mdp,
-      codeVictoire: code || "OMEGA-7-LIBRE",
-      codeFinal:    codeFinal || "94",
-      msgVictoire:  msgVic || "Félicitations !",
+      motDePasse:    mdp,
+      codeVictoire:  code || "OMEGA-7-LIBRE",
+      codeFinal:     codeFinal || "94",
+      msgVictoire:   msgVic || "Félicitations !",
+      msgGameOver:   msgGameOver || "",
+      questionP2,
+      reponseP2,
+      msgQuestionP2: msgQuestionP2 || "Entrez le code pour accéder à la phase finale.",
       sessionId,
     });
-    await set(ref(db, "enigmes"), enigmes);
-    afficherStatut("✓ CONFIG & ÉNIGMES SAUVEGARDÉES DANS FIREBASE", "ok");
+    for (let i = 0; i < 3; i++) {
+      await set(ref(db, `enigmes_p${i+1}`), enigmesParParties[i]);
+    }
+    afficherStatut("✓ CONFIG & ÉNIGMES (3 PARTIES) SAUVEGARDÉES", "ok");
   } catch(e) {
     afficherStatut("⚠ Erreur Firebase : " + e.message, "err");
   }
@@ -269,12 +288,8 @@ async function reinitialiserJeu() {
   sessionId = newSession;
 
   try {
-    // Mettre à jour la sessionId dans config → déclenche la déconnexion de tous les joueurs
     await update(ref(db, "config"), { sessionId: newSession });
-    // Optionnel : supprimer l'ancienne session
-    // (on garde les données pour archivage ; seul sessionId change)
     afficherStatut("✓ JEU RÉINITIALISÉ — Nouvelle session : " + newSession, "ok");
-    // Relancer l'écoute sur la nouvelle session
     ecouterJoueurs();
     ecouterClassement();
   } catch(e) {
@@ -288,32 +303,33 @@ function genSessionId() {
 }
 
 // ══════════════════════════════════════════════════════
-// GESTION DES ÉNIGMES (formulaire)
+// GESTION DES ÉNIGMES PAR PARTIE
 // ══════════════════════════════════════════════════════
 function norm(s) {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
 }
 
-function renderEnigmes(enigmes) {
-  const container = document.getElementById("enigmes-container");
+function renderEnigmes(enigmes, partie) {
+  const container = document.getElementById(`enigmes-container-p${partie}`);
   container.innerHTML = "";
-  enigmes.forEach((e, i) => container.appendChild(creerCarte(e, i)));
+  enigmes.forEach((e, i) => container.appendChild(creerCarte(e, i, partie)));
 }
 window.renderEnigmes = renderEnigmes;
 
-function creerCarte(e, i) {
+function creerCarte(e, i, partie) {
   const card = document.createElement("div");
   card.className = "enigme-card";
   card.dataset.index = i;
+  card.dataset.partie = partie;
 
   card.innerHTML = `
     <div class="card-header" onclick="toggleCarte(this)">
       <div class="card-num">${String(i+1).padStart(2,"0")}</div>
       <div class="card-titre-preview">${e.titre || "Nouvelle énigme"}</div>
       <div class="card-actions" onclick="event.stopPropagation()">
-        <button class="btn-move" onclick="monterEnigme(${i})" title="Monter">▲</button>
-        <button class="btn-move" onclick="descendreEnigme(${i})" title="Descendre">▼</button>
-        <button class="btn-del" onclick="supprimerEnigme(${i})">✕ SUPPRIMER</button>
+        <button class="btn-move" onclick="monterEnigme(${i}, ${partie})" title="Monter">▲</button>
+        <button class="btn-move" onclick="descendreEnigme(${i}, ${partie})" title="Descendre">▼</button>
+        <button class="btn-del" onclick="supprimerEnigme(${i}, ${partie})">✕ SUPPRIMER</button>
       </div>
       <div class="card-toggle">▼</div>
     </div>
@@ -324,7 +340,7 @@ function creerCarte(e, i) {
                oninput="this.closest('.enigme-card').querySelector('.card-titre-preview').textContent=this.value||'Nouvelle énigme'">
       </div>
       <div class="field-group">
-        <label>Introduction (texte affiché au début)</label>
+        <label>Introduction (texte affiché au joueur)</label>
         <textarea class="f-intro" rows="5">${e.intro||""}</textarea>
       </div>
       <div class="field-group">
@@ -352,7 +368,6 @@ function creerCarte(e, i) {
     </div>
   `;
 
-  // Injecter les réponses
   const repRow = card.querySelector(".f-reponses");
   (e.reponses || []).forEach(r => repRow.appendChild(creerTag(r)));
 
@@ -383,8 +398,8 @@ function ajouterReponse(btn) {
 }
 window.ajouterReponse = ajouterReponse;
 
-function collecterEnigmes() {
-  return Array.from(document.querySelectorAll(".enigme-card")).map(card => ({
+function collecterEnigmes(partie) {
+  return Array.from(document.querySelectorAll(`#enigmes-container-p${partie} .enigme-card`)).map(card => ({
     titre:    card.querySelector(".f-titre").value.trim(),
     intro:    card.querySelector(".f-intro").value.trim(),
     indice1:  card.querySelector(".f-indice1").value.trim(),
@@ -397,32 +412,32 @@ function collecterEnigmes() {
   }));
 }
 
-function monterEnigme(i) {
+function monterEnigme(i, partie) {
   if (i === 0) return;
-  const enigmes = collecterEnigmes();
+  const enigmes = collecterEnigmes(partie);
   [enigmes[i], enigmes[i-1]] = [enigmes[i-1], enigmes[i]];
-  renderEnigmes(enigmes);
+  renderEnigmes(enigmes, partie);
 }
 window.monterEnigme = monterEnigme;
 
-function descendreEnigme(i) {
-  const enigmes = collecterEnigmes();
+function descendreEnigme(i, partie) {
+  const enigmes = collecterEnigmes(partie);
   if (i >= enigmes.length - 1) return;
   [enigmes[i], enigmes[i+1]] = [enigmes[i+1], enigmes[i]];
-  renderEnigmes(enigmes);
+  renderEnigmes(enigmes, partie);
 }
 window.descendreEnigme = descendreEnigme;
 
-function supprimerEnigme(i) {
+function supprimerEnigme(i, partie) {
   if (!confirm("Supprimer cette énigme ?")) return;
-  const enigmes = collecterEnigmes();
+  const enigmes = collecterEnigmes(partie);
   enigmes.splice(i, 1);
-  renderEnigmes(enigmes);
+  renderEnigmes(enigmes, partie);
 }
 window.supprimerEnigme = supprimerEnigme;
 
-function ajouterEnigme() {
-  const enigmes = collecterEnigmes();
+function ajouterEnigme(partie) {
+  const enigmes = collecterEnigmes(partie);
   enigmes.push({
     titre: `ÉNIGME ${String(enigmes.length+1).padStart(2,"0")} — NOUVEAU`,
     intro: "", indice1:"", indice2:"", indice3:"",
@@ -430,9 +445,9 @@ function ajouterEnigme() {
     victoire: ">>> RÉPONSE VALIDÉE <<<\nVerrou désactivé.",
     reponses: [],
   });
-  renderEnigmes(enigmes);
+  renderEnigmes(enigmes, partie);
   setTimeout(() => {
-    const ws = document.getElementById("enigmes-container");
+    const ws = document.getElementById(`enigmes-container-p${partie}`);
     ws.lastChild?.scrollIntoView({ behavior:"smooth" });
   }, 150);
 }
@@ -441,35 +456,9 @@ window.ajouterEnigme = ajouterEnigme;
 function afficherStatut(msg, cls) {
   const s = document.getElementById("save-status");
   s.textContent = msg; s.className = "save-status " + cls;
-  setTimeout(() => { s.textContent = ""; s.className = "save-status"; }, 6000);
+  setTimeout(() => { s.textContent = ""; s.className = "save-status"; }, 7000);
 }
 
-// Charger données par défaut dans Firebase si vierge
-async function initFirebaseParDefaut() {
-  const snap = await get(ref(db, "config"));
-  if (!snap.exists()) {
-    const newSession = genSessionId();
-    sessionId = newSession;
-    await set(ref(db, "config"), {
-      motDePasse: "club ados",
-      codeVictoire: "OMEGA-7-LIBRE",
-      msgVictoire: "Félicitations, agent !\nVous avez déverrouillé le système TERMINAL-7.",
-      sessionId: newSession,
-    });
-    await set(ref(db, "enigmes"), [
-      {
-        titre: "ÉNIGME 01 — IDENTIFICATION",
-        intro: "Données chiffrées détectées dans le secteur 7.\nUn scientifique a laissé un message codé :\n\n« Je suis l'inverse du jour, je vis dans la nuit.\nOn me craint, mais je guide les perdus. »\n\nIdentifiez l'entité décrite.",
-        indice1: "L'entité se trouve dans le ciel. Visible la nuit uniquement.",
-        indice2: "Elle émet sa propre lumière. Elle n'a pas besoin du Soleil.",
-        indice3: "Les navigateurs l'utilisaient pour s'orienter. La Polaire en est une.",
-        echec: "Réponse incorrecte. Relisez le message du scientifique.",
-        victoire: ">>> RÉPONSE VALIDÉE <<<\nL'entité est une ÉTOILE.\nVerrou 01 désactivé.",
-        reponses: ["etoile","etoiles","une etoile","les etoiles"],
-      },
-    ]);
-  }
-}
 </script>
 
 <style>
@@ -489,6 +478,9 @@ async function initFirebaseParDefaut() {
   --admin:      #00ccff;
   --admin-dim:  #005577;
   --admin-glow: #00ccff33;
+  --p1:         #00ff88;
+  --p2:         #ffcc00;
+  --p3:         #ff6666;
 }
 *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
 input, textarea, select { font-size: max(14px, 1em); }
@@ -561,12 +553,12 @@ body {
 /* ══ TABS ══ */
 #tabs {
   display:flex; gap:0; border-bottom:1px solid var(--admin-dim); flex-shrink:0;
-  background:var(--bg-panel);
+  background:var(--bg-panel); overflow-x:auto;
 }
 .tab-btn {
   background:transparent; border:none; border-bottom:2px solid transparent;
   color:var(--admin-dim); font-family:'Share Tech Mono',monospace; font-size:.72rem;
-  padding:10px 20px; cursor:pointer; letter-spacing:2px; transition:all .2s;
+  padding:10px 16px; cursor:pointer; letter-spacing:1px; transition:all .2s; white-space:nowrap;
 }
 .tab-btn:hover { color:var(--admin); }
 .tab-btn.active { color:var(--admin); border-bottom-color:var(--admin); }
@@ -576,20 +568,14 @@ body {
 .tab-content.active { display:flex; }
 
 /* ── Onglet LIVE ── */
-#tab-live {
-  overflow-y:auto; padding:20px; gap:20px; -webkit-overflow-scrolling:touch;
-}
+#tab-live { overflow-y:auto; padding:20px; gap:20px; -webkit-overflow-scrolling:touch; }
 .section-title {
   font-size:.65rem; color:var(--admin); letter-spacing:3px;
   padding-bottom:6px; border-bottom:1px solid var(--admin-dim); margin-bottom:12px;
 }
-table {
-  width:100%; border-collapse:collapse; font-size:.78rem;
-}
-th {
-  text-align:left; padding:8px 12px; font-size:.62rem; letter-spacing:2px;
-  color:var(--admin-dim); border-bottom:1px solid var(--admin-dim); white-space:nowrap;
-}
+table { width:100%; border-collapse:collapse; font-size:.78rem; }
+th { text-align:left; padding:8px 12px; font-size:.62rem; letter-spacing:2px;
+  color:var(--admin-dim); border-bottom:1px solid var(--admin-dim); white-space:nowrap; }
 td { padding:8px 12px; border-bottom:1px solid #0a2010; }
 .td-prenom { color:var(--cyan); font-weight:bold; }
 .td-temps  { font-family:'VT323',monospace; font-size:1rem; color:var(--yellow); }
@@ -598,6 +584,9 @@ td { padding:8px 12px; border-bottom:1px solid #0a2010; }
 .empty-cell { color:var(--admin-dim); text-align:center; padding:20px; font-style:italic; }
 .badge-ok        { color:var(--green); font-size:.68rem; }
 .badge-en-cours  { color:var(--yellow); font-size:.68rem; }
+.badge-p1 { color:var(--p1); font-size:.68rem; }
+.badge-p2 { color:var(--p2); font-size:.68rem; }
+.badge-p3 { color:var(--p3); font-size:.68rem; }
 tr:hover td { background:rgba(0,204,255,.04); }
 
 /* ── Onglet CONFIG ── */
@@ -608,6 +597,12 @@ tr:hover td { background:rgba(0,204,255,.04); }
   margin-bottom:4px;
 }
 .config-grid .section-title { grid-column:1/-1; margin-bottom:0; }
+.config-transition {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(240px,1fr)); gap:12px;
+  padding:16px; border:1px solid #ffcc0044; background:rgba(30,20,0,.5);
+  margin-bottom:4px;
+}
+.config-transition .section-title { grid-column:1/-1; color:var(--yellow); border-bottom-color:#ffcc0044; }
 .field-group { display:flex; flex-direction:column; gap:5px; }
 .field-group label { font-size:.6rem; color:var(--admin-dim); letter-spacing:2px; text-transform:uppercase; }
 .field-group input,
@@ -621,8 +616,32 @@ tr:hover td { background:rgba(0,204,255,.04); }
 .field-group textarea { min-height:65px; line-height:1.5; }
 .field-hint { font-size:.58rem; color:#334455; letter-spacing:.5px; }
 
-/* ── Onglet ÉNIGMES ── */
-#tab-enigmes { overflow-y:auto; padding:20px; gap:12px; -webkit-overflow-scrolling:touch; }
+/* ── Onglet ÉNIGMES (3 parties) ── */
+#tab-enigmes { overflow-y:auto; padding:0; gap:0; -webkit-overflow-scrolling:touch; }
+.partie-section {
+  padding:0;
+  border-bottom:2px solid var(--admin-dim);
+}
+.partie-header {
+  display:flex; align-items:center; gap:12px;
+  padding:14px 20px; cursor:pointer; user-select:none;
+  background:rgba(0,10,20,.6); border-bottom:1px solid var(--admin-dim);
+  transition:background .2s;
+}
+.partie-header:hover { background:rgba(0,20,40,.8); }
+.partie-header-p1 { border-left:4px solid var(--p1); }
+.partie-header-p2 { border-left:4px solid var(--p2); }
+.partie-header-p3 { border-left:4px solid var(--p3); }
+.partie-badge-p1 { color:var(--p1); font-family:'VT323',monospace; font-size:1.4rem; min-width:60px; }
+.partie-badge-p2 { color:var(--p2); font-family:'VT323',monospace; font-size:1.4rem; min-width:60px; }
+.partie-badge-p3 { color:var(--p3); font-family:'VT323',monospace; font-size:1.4rem; min-width:60px; }
+.partie-title { flex:1; }
+.partie-title strong { font-size:.85rem; letter-spacing:2px; }
+.partie-title small { display:block; font-size:.6rem; color:var(--admin-dim); margin-top:2px; }
+.partie-toggle { font-size:.7rem; color:var(--admin-dim); }
+.partie-body { padding:16px 20px; display:flex; flex-direction:column; gap:8px; }
+.partie-body.collapsed { display:none; }
+
 .enigme-card { border:1px solid var(--admin-dim); background:rgba(0,15,30,.6); margin-bottom:2px; }
 .enigme-card:focus-within { border-color:var(--admin); }
 .card-header {
@@ -653,8 +672,16 @@ tr:hover td { background:rgba(0,204,255,.04); }
 .rep-tag .del-rep:hover { color:var(--red); }
 .add-rep-btn { background:transparent; border:1px dashed var(--admin-dim); color:var(--admin-dim); font-family:'Share Tech Mono',monospace; font-size:.66rem; padding:4px 10px; cursor:pointer; transition:all .2s; min-height:28px; }
 .add-rep-btn:hover { border-color:var(--admin); color:var(--admin); }
-#add-enigme-btn { background:transparent; border:1px dashed var(--admin-dim); color:var(--admin-dim); font-family:'Share Tech Mono',monospace; font-size:.72rem; padding:14px; cursor:pointer; letter-spacing:2px; transition:all .25s; text-align:center; width:100%; min-height:44px; margin-top:4px; }
-#add-enigme-btn:hover { border-color:var(--admin); color:var(--admin); background:rgba(0,204,255,.04); }
+.add-enigme-btn {
+  background:transparent; border:1px dashed var(--admin-dim); color:var(--admin-dim);
+  font-family:'Share Tech Mono',monospace; font-size:.72rem; padding:12px;
+  cursor:pointer; letter-spacing:2px; transition:all .25s; text-align:center;
+  width:100%; min-height:40px; margin-top:4px;
+}
+.add-enigme-btn:hover { border-color:var(--admin); color:var(--admin); background:rgba(0,204,255,.04); }
+.add-enigme-btn-p1:hover { border-color:var(--p1); color:var(--p1); }
+.add-enigme-btn-p2:hover { border-color:var(--p2); color:var(--p2); }
+.add-enigme-btn-p3:hover { border-color:var(--p3); color:var(--p3); }
 </style>
 </head>
 <body>
@@ -685,48 +712,53 @@ tr:hover td { background:rgba(0,204,255,.04); }
 
   <!-- Tabs -->
   <div id="tabs">
-    <button class="tab-btn active" onclick="showTab('live')">■ EN DIRECT</button>
-    <button class="tab-btn" onclick="showTab('classement')">▲ CLASSEMENT</button>
-    <button class="tab-btn" onclick="showTab('config')">⚙ CONFIG</button>
-    <button class="tab-btn" onclick="showTab('enigmes')">≡ ÉNIGMES</button>
+    <button class="tab-btn active" onclick="showTab('live', this)">■ EN DIRECT</button>
+    <button class="tab-btn" onclick="showTab('classement', this)">▲ CLASSEMENT</button>
+    <button class="tab-btn" onclick="showTab('config', this)">⚙ CONFIG</button>
+    <button class="tab-btn" onclick="showTab('enigmes', this)">≡ ÉNIGMES</button>
   </div>
 
   <!-- Tab : EN DIRECT -->
   <div class="tab-content active" id="tab-live">
-    <div class="section-title">■ JOUEURS EN COURS — MIS À JOUR EN TEMPS RÉEL</div>
-    <table>
-      <thead>
-        <tr>
-          <th>JOUEUR</th>
-          <th>MOT DE PASSE</th>
-          <th>STATUT</th>
-          <th>ÉTAPE</th>
-          <th>CHRONO</th>
-          <th>INDICES</th>
-        </tr>
-      </thead>
-      <tbody id="joueurs-tbody">
-        <tr><td colspan="6" class="empty-cell">Chargement…</td></tr>
-      </tbody>
-    </table>
+    <div class="section-title" style="padding:20px 20px 0">■ JOUEURS EN COURS — MIS À JOUR EN TEMPS RÉEL</div>
+    <div style="overflow-y:auto; flex:1; padding:0 20px 20px">
+      <table style="margin-top:12px">
+        <thead>
+          <tr>
+            <th>JOUEUR</th>
+            <th>MOT DE PASSE</th>
+            <th>PHASE</th>
+            <th>PROGRESSION</th>
+            <th>CHRONO</th>
+            <th>INDICES</th>
+            <th>TEMPS FINAL</th>
+          </tr>
+        </thead>
+        <tbody id="joueurs-tbody">
+          <tr><td colspan="7" class="empty-cell">Chargement…</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Tab : CLASSEMENT -->
   <div class="tab-content" id="tab-classement">
-    <div class="section-title">▲ TABLEAU DES SCORES — JOUEURS AYANT TERMINÉ</div>
-    <table>
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>JOUEUR</th>
-          <th>TEMPS FINAL</th>
-          <th>INDICES UTILISÉS</th>
-        </tr>
-      </thead>
-      <tbody id="classement-tbody">
-        <tr><td colspan="4" class="empty-cell">Aucun joueur n'a terminé</td></tr>
-      </tbody>
-    </table>
+    <div class="section-title" style="padding:20px 20px 0">▲ TABLEAU DES SCORES — JOUEURS AYANT TERMINÉ</div>
+    <div style="overflow-y:auto; flex:1; padding:0 20px 20px">
+      <table style="margin-top:12px">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>JOUEUR</th>
+            <th>TEMPS FINAL</th>
+            <th>INDICES UTILISÉS</th>
+          </tr>
+        </thead>
+        <tbody id="classement-tbody">
+          <tr><td colspan="4" class="empty-cell">Aucun joueur n'a terminé</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Tab : CONFIG -->
@@ -734,19 +766,19 @@ tr:hover td { background:rgba(0,204,255,.04); }
     <div class="config-grid">
       <div class="section-title">⚙ CONFIGURATION GLOBALE</div>
       <div class="field-group">
-        <label>Mot de passe joueur</label>
+        <label>Mot de passe joueur (code accès session)</label>
         <input type="text" id="cfg-mdp" placeholder="ex : club ados">
         <span class="field-hint">Partagé avec tous les joueurs pour accéder au terminal</span>
       </div>
       <div class="field-group">
-        <label>Code de victoire</label>
+        <label>Code de victoire (affiché à la fin)</label>
         <input type="text" id="cfg-code" placeholder="ex : OMEGA-7-LIBRE">
-        <span class="field-hint">Affiché à l'écran final quand le joueur termine</span>
+        <span class="field-hint">Affiché sur l'écran final quand le joueur termine</span>
       </div>
       <div class="field-group">
         <label>Code final (arrête le chrono)</label>
         <input type="text" id="cfg-code-final" placeholder="ex : 94">
-        <span class="field-hint">Code que vous donnez verbalement au joueur à la fin. Arrête le chronomètre.</span>
+        <span class="field-hint">Code donné verbalement à la fin de la partie 3. Arrête le chronomètre.</span>
       </div>
       <div class="field-group" style="grid-column:1/-1">
         <label>Message écran victoire</label>
@@ -757,26 +789,98 @@ tr:hover td { background:rgba(0,204,255,.04); }
         <input type="text" id="cfg-msg-gameover" placeholder="TEMPS ÉCOULÉ — SYSTÈME COMPROMIS">
       </div>
     </div>
+
+    <div class="config-transition">
+      <div class="section-title">🔑 TRANSITION PARTIE 2 → PARTIE 3</div>
+      <div class="field-group" style="grid-column:1/-1">
+        <label>Texte / message affiché avant la saisie du code</label>
+        <textarea id="cfg-msg-question-p2" rows="3" placeholder="Entrez le code pour accéder à la phase finale."></textarea>
+        <span class="field-hint">Ce message s'affiche après que toutes les énigmes de la partie 2 sont résolues.</span>
+      </div>
+      <div class="field-group">
+        <label>Question / intitulé affiché au joueur</label>
+        <input type="text" id="cfg-question-p2" placeholder="ex : CODE D'ACCÈS PHASE 3 >">
+        <span class="field-hint">Apparaît comme invite de saisie. Visible par le joueur.</span>
+      </div>
+      <div class="field-group">
+        <label>Réponse / code attendu (secret)</label>
+        <input type="text" id="cfg-reponse-p2" placeholder="ex : ALPHA7 ou 1234">
+        <span class="field-hint">Insensible à la casse. Transmis verbalement par le maître du jeu.</span>
+      </div>
+    </div>
   </div>
 
-  <!-- Tab : ÉNIGMES -->
+  <!-- Tab : ÉNIGMES (3 parties) -->
   <div class="tab-content" id="tab-enigmes">
-    <div class="section-title">≡ GESTION DES ÉNIGMES</div>
-    <div id="enigmes-container"></div>
-    <button id="add-enigme-btn" onclick="ajouterEnigme()">+ AJOUTER UNE ÉNIGME</button>
-  </div>
 
-</div>
+    <!-- PARTIE 1 -->
+    <div class="partie-section">
+      <div class="partie-header partie-header-p1" onclick="togglePartie(1)">
+        <div class="partie-badge-p1">P1</div>
+        <div class="partie-title">
+          <strong>PREMIÈRE PARTIE ESCAPE</strong>
+          <small>Les joueurs choisissent librement l'ordre de résolution</small>
+        </div>
+        <div class="partie-toggle" id="toggle-p1">▼</div>
+      </div>
+      <div class="partie-body" id="partie-body-1">
+        <div id="enigmes-container-p1"></div>
+        <button class="add-enigme-btn add-enigme-btn-p1" onclick="ajouterEnigme(1)">+ AJOUTER UNE ÉNIGME — PARTIE 1</button>
+      </div>
+    </div>
+
+    <!-- PARTIE 2 -->
+    <div class="partie-section">
+      <div class="partie-header partie-header-p2" onclick="togglePartie(2)">
+        <div class="partie-badge-p2">P2</div>
+        <div class="partie-title">
+          <strong>DEUXIÈME PARTIE ESCAPE</strong>
+          <small>Se déclenche après la partie 1 — ordre libre également</small>
+        </div>
+        <div class="partie-toggle" id="toggle-p2">▼</div>
+      </div>
+      <div class="partie-body" id="partie-body-2">
+        <div id="enigmes-container-p2"></div>
+        <button class="add-enigme-btn add-enigme-btn-p2" onclick="ajouterEnigme(2)">+ AJOUTER UNE ÉNIGME — PARTIE 2</button>
+      </div>
+    </div>
+
+    <!-- PARTIE 3 -->
+    <div class="partie-section">
+      <div class="partie-header partie-header-p3" onclick="togglePartie(3)">
+        <div class="partie-badge-p3">P3</div>
+        <div class="partie-title">
+          <strong>TROISIÈME PARTIE — ÉNIGME FINALE</strong>
+          <small>Accessible après le code de transition depuis la partie 2</small>
+        </div>
+        <div class="partie-toggle" id="toggle-p3">▼</div>
+      </div>
+      <div class="partie-body" id="partie-body-3">
+        <div id="enigmes-container-p3"></div>
+        <button class="add-enigme-btn add-enigme-btn-p3" onclick="ajouterEnigme(3)">+ AJOUTER UNE ÉNIGME — PARTIE 3</button>
+      </div>
+    </div>
+
+  </div><!-- /tab-enigmes -->
+
+</div><!-- /main-panel -->
 
 <script>
-// Gestion des onglets
-function showTab(name) {
+function showTab(name, btn) {
   document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
   document.getElementById("tab-" + name).classList.add("active");
-  event.target.classList.add("active");
+  if (btn) btn.classList.add("active");
 }
 window.showTab = showTab;
+
+function togglePartie(num) {
+  const body = document.getElementById(`partie-body-${num}`);
+  const tog  = document.getElementById(`toggle-p${num}`);
+  body.classList.toggle("collapsed");
+  tog.textContent = body.classList.contains("collapsed") ? "▶" : "▼";
+}
+window.togglePartie = togglePartie;
 </script>
 </body>
 </html>
